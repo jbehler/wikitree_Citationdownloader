@@ -14,6 +14,43 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
 
+## Neu in Version 0.12.0
+
+- **Generische Quellenerkennung statt Domain-Liste.** Bisher musste jede
+  Archiv-Domain einzeln im Erkennungsmuster ergänzt werden (Matricula,
+  Landesarchiv NRW, Arcinsys, …) - das skaliert nicht, wenn ständig neue
+  Systeme auftauchen (z. B. Landesarchiv Baden-Württemberg mit eigenem
+  `plink`-Permalink-System, oder die polnische Digitalbibliothek
+  `wbc.poznan.pl` auf Basis von dLibra - beides komplett andere Systeme
+  als die bisher unterstützten). Die Extension durchsucht jetzt
+  stattdessen **alle externen Links innerhalb von WikiTrees eigener
+  Quellenliste** (`<li class="x-src">`, also die Fußnoten unter
+  "Sources") - unabhängig von der Domain. Das ist sicher genug, um kein
+  Rauschen von Navigation/Werbung/WikiTree-eigenen Links aufzunehmen,
+  erkennt aber jetzt jede zitierte externe Quelle.
+- Für bisher unbekannte Systeme („sonstige-quelle“): Link wird korrekt
+  zitiert (inkl. abgeleitetem Institutionsnamen aus der Domain und
+  Seitenzahl-Hinweis aus der Quellenbeschreibung, falls vorhanden), aber
+  **kein** automatischer Bildabruf-Versuch (dafür fehlen sowohl
+  `host_permissions` als auch eine passende Extraktionslogik) und
+  **keine** Lizenzbehauptung - stattdessen der Hinweis, dass dieses
+  System noch nicht unterstützt wird.
+- Findet sich auf einer Seite gar keine `<li class="x-src">`-Struktur
+  (z. B. weil WikiTree das Layout mal ändert), fällt die Extension auf
+  das alte, engere Verhalten zurück (nur bekannte Archiv-Domains, ganze
+  Seite durchsucht) - so bleibt zumindest die bisherige Funktionalität
+  erhalten.
+
+## Neu in Version 0.11.1
+
+- **Bugfix Seitenzahl-Erkennung:** Das Muster für die Seitenzahl aus der
+  Quellenbeschreibung (siehe 0.10.0) kannte weder das englische Wort
+  „page“ noch „Blatt“/„Bl.“ - nur „S.“, „Seite“, „p.“, „pag.“, „fol.“.
+  Beispiele wie „page 60, Certificate 60“ oder „Blatt 5, Zertifikat 5“
+  wurden dadurch übersehen (und, wichtig, auch nicht mit der daneben-
+  stehenden Zertifikatsnummer verwechselt - nur die echte Seiten-/
+  Blattangabe wird erfasst).
+
 ## Neu in Version 0.11.0
 
 - **Arcinsys-Direktlinks: passender DFG-Viewer-Link wird vorgeschlagen.**

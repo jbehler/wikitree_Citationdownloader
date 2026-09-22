@@ -21,7 +21,6 @@
  */
 
 (function () {
-  const SOURCE_LINK_RE = /(matricula-online\.eu|dfg-viewer\.de|landesarchiv-nrw\.de|arcinsys\.)/i;
   let manualTarget = null; // per Klick ausgewähltes Editor-Feld (Textarea oder contenteditable)
 
   // Bekannte Institutionen mit verifizierten Lizenzangaben. Für alles
@@ -89,6 +88,19 @@
         citationLicenseNote: known ? known.citationLicenseNote : null
       };
     }
+    if (source.domain === "sonstige-quelle") {
+      let host = null;
+      try {
+        host = new URL(source.url).hostname;
+      } catch (e) {
+        /* ignorieren */
+      }
+      const known = host && KNOWN_INSTITUTIONS[host];
+      return {
+        name: (known && known.name) || humanizeHost(host) || "unbekannte Quelle",
+        citationLicenseNote: known ? known.citationLicenseNote : null
+      };
+    }
     return null;
   }
 
@@ -97,36 +109,60 @@
     if (/matricula-online\.eu/i.test(href)) return "matricula";
     if (/landesarchiv-nrw\.de/i.test(href)) return "landesarchiv-nrw-direkt";
     if (/arcinsys\./i.test(href)) return "arcinsys-direkt";
-    return "unbekannt";
+    return "sonstige-quelle";
   }
 
   function extractPageHintFromContext(anchor) {
     // Rein informativ: sucht im nahen Textumfeld des Links nach einer
-    // Seitenangabe wie "S. 123", "Seite 123", "p. 123", "fol. 123" - so,
-    // wie sie oft schon in der ursprünglichen Quellenbeschreibung auf
-    // WikiTree steht. Keine Grundlage für automatischen Bildabruf, nur
-    // eine Orientierungshilfe für die manuelle Navigation.
+    // Seitenangabe wie "S. 123", "Seite 123", "page 123", "Blatt 5",
+    // "Bl. 5", "p. 123", "fol. 123" - so, wie sie oft schon in der
+    // ursprünglichen Quellenbeschreibung auf WikiTree steht. Keine
+    // Grundlage für automatischen Bildabruf, nur eine Orientierungshilfe
+    // für die manuelle Navigation. "Certificate"/"Zertifikat"-Nummern
+    // werden bewusst NICHT erfasst, auch wenn sie danebenstehen - nur
+    // die tatsächliche Seiten-/Blattangabe.
     const container = anchor.closest("li, p, div") || anchor.parentElement;
     const text = container ? container.textContent : "";
-    const m = /\b(?:S\.?|Seite|p\.?|pag\.?|fol\.?)\s*(\d+)\b/i.exec(text || "");
+    const m = /\b(?:S\.?|Seite|Blatt|Bl\.?|page|pages|p\.?|pag\.?|fol\.?)\s*(\d+)\b/i.exec(text || "");
     return m ? m[1] : null;
   }
 
   function findSourceLinks() {
-    const anchors = Array.from(document.querySelectorAll("a[href]"));
+    // Bevorzugt: nur externe Links innerhalb von WikiTrees eigener
+    // Quellenliste (<li class="x-src">, die Fußnoten unter "Sources").
+    // Das erlaubt, JEDEN dort zitierten externen Archiv-/Bibliothekslink
+    // zu erkennen - unabhängig davon, ob mir das jeweilige System schon
+    // bekannt ist -, ohne bei irrelevanten Links auf der restlichen Seite
+    // (Navigation, Werbung, WikiTree-eigene Verlinkungen) Rauschen zu
+    // erzeugen. Findet sich keine solche Liste (z.B. weil WikiTree die
+    // Struktur mal ändert), wird ersatzweise auf das alte, engere Muster
+    // zurückgefallen (nur bekannte Archiv-Domains, ganze Seite).
+    const sourceItems = document.querySelectorAll("li.x-src");
+    const scopedToKnownSourceList = sourceItems.length > 0;
+    const anchors = scopedToKnownSourceList
+      ? Array.from(sourceItems).flatMap((li) => Array.from(li.querySelectorAll("a[href]")))
+      : Array.from(document.querySelectorAll("a[href]"));
+
     const seen = new Set();
     const results = [];
     for (const a of anchors) {
       const href = a.href;
-      if (SOURCE_LINK_RE.test(href) && !seen.has(href)) {
-        seen.add(href);
-        results.push({
-          url: href,
-          domain: classifyDomain(href),
-          linkText: (a.textContent || "").trim().slice(0, 80),
-          citedPageHint: extractPageHintFromContext(a)
-        });
-      }
+      if (!/^https?:\/\//i.test(href)) continue; // interne Anker wie #_ref-1 überspringen
+      if (seen.has(href)) continue;
+
+      const domain = classifyDomain(href);
+      // Im Fallback-Modus (ganze Seite, keine Quellenliste gefunden) nur
+      // bereits bekannte Archiv-Domains akzeptieren, um Seiten-Rauschen
+      // zu vermeiden - "sonstige-quelle" gibt es dort bewusst nicht.
+      if (!scopedToKnownSourceList && domain === "sonstige-quelle") continue;
+
+      seen.add(href);
+      results.push({
+        url: href,
+        domain,
+        linkText: (a.textContent || "").trim().slice(0, 80),
+        citedPageHint: extractPageHintFromContext(a)
+      });
     }
     return results;
   }
@@ -157,6 +193,14 @@
         `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Link verweist auf das Gesamtdokument, ` +
         `bitte im Dokument selbst zur passenden Seite navigieren. Lizenz-/Nutzungsbedingungen nicht bekannt ` +
         `(nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei ${info.name} nachsehen.`;
+    } else if (source.domain === "sonstige-quelle") {
+      const info = institutionInfoForSource(source);
+      const pageHint = source.citedPageHint ? ` (vermutlich Seite ${source.citedPageHint})` : "";
+      citation =
+        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Automatischer Bildabruf für diese Quelle ` +
+        `ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen. Lizenz-/` +
+        `Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
+        `direkt bei ${info.name} nachsehen.`;
     } else {
       citation =
         `* Digitalisat: [${source.url} unbekanntes Archiv] – ` +
@@ -251,7 +295,19 @@
       if (quick && quick.ok) return quick;
       return chrome.runtime.sendMessage({ type: "FIND_IMAGE_VIA_HIDDEN_TAB", url: source.url });
     }
-    return chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_URL", url: source.url });
+    if (source.domain === "sonstige-quelle") {
+      // Unbekanntes System (z.B. dLibra, ein anderes Landesarchiv-System
+      // usw.) - kein Fetch-Versuch, da weder host_permissions noch eine
+      // passende Extraktionslogik dafür existieren. Lieber ehrlich sofort
+      // sagen, dass das (noch) nicht unterstützt wird, statt einen
+      // sicher fehlschlagenden Netzwerk-Versuch zu starten.
+      const pageHint = source.citedPageHint ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.` : "";
+      return {
+        ok: false,
+        reason: `Dieses System wird von der Extension noch nicht unterstützt - bitte manuell öffnen und herunterladen.${pageHint}`
+      };
+    }
+    return { ok: false, reason: "Keine passende Abruf-Methode für diese Quelle bekannt." };
   }
 
   // ---------------------------------------------------------------------
@@ -366,6 +422,10 @@
     if (source.domain === "arcinsys-direkt") {
       const info = institutionInfoForSource(source);
       return `${info.name} (Gesamtdokument)`;
+    }
+    if (source.domain === "sonstige-quelle") {
+      const info = institutionInfoForSource(source);
+      return info.name;
     }
     return "Quelle";
   }
