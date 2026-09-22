@@ -14,6 +14,25 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
 
+## Neu in Version 0.11.0
+
+- **Arcinsys-Direktlinks: passender DFG-Viewer-Link wird vorgeschlagen.**
+  Solche Links zeigen nur auf das Gesamtdokument (siehe 0.10.0). Jetzt
+  sucht die Extension zusätzlich auf der Arcinsys-Seite selbst nach dem
+  dort oft vorhandenen Link „In DFG-Viewer öffnen“ (ggf. über eine
+  verlinkte „digitalMediaViewer“-Unterseite). Wird er gefunden, baut die
+  Extension daraus einen normalen `tx_dlf[id]`/`tx_dlf[page]`-Permalink -
+  bei bekannter Seitenzahl (aus der Quellenbeschreibung, siehe 0.10.0)
+  direkt inklusive Bildabruf über die bereits bewährte METS-Logik.
+  Im Panel erscheint dann der Button „💡 Quelle auf gefundenen
+  DFG-Viewer-Link umstellen“ - ein Klick ersetzt die Quelle durch den
+  gefundenen Link (inkl. „Folgeseite“-Funktion, korrekter Institutions-
+  erkennung usw., wie bei jedem anderen DFG-Viewer-Link).
+- Nicht verifiziert: ob andere Arcinsys-Länder-Installationen denselben
+  Linktext/dieselbe URL-Struktur für "In DFG-Viewer öffnen" verwenden.
+  Schlägt die Suche fehl, bleibt es beim bisherigen Verhalten (Link
+  zitieren, manuell navigieren).
+
 ## Neu in Version 0.10.0
 
 - **Direkte Arcinsys-Links (Gesamtdokument statt Einzelseite) werden

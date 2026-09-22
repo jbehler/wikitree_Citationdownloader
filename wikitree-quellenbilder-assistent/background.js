@@ -750,3 +750,99 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+// ---------------------------------------------------------------------
+// Arcinsys-Direktlinks: passenden DFG-Viewer-Link finden und vorschlagen
+// -----------------------------------------------------------------------
+// Solche Links (z.B. "showArchivalDescriptionDetails") zeigen nur auf das
+// Gesamtdokument. Arcinsys-Seiten enthalten aber oft einen Link "In
+// DFG-Viewer öffnen", der auf dieselbe METS-Datei verweist wie die
+// METS-basierte Bildsuche, die für DFG-Viewer-Links schon funktioniert.
+// Wird dieser Link gefunden, wird daraus (zusammen mit einer ggf. aus der
+// Quellenbeschreibung bekannten Seitenzahl) ein normaler
+// tx_dlf[id]/tx_dlf[page]-Permalink gebaut und über die bereits
+// bestehende METS-Logik ausgewertet.
+//
+// Bekannte Einschränkung: Der "In DFG-Viewer öffnen"-Link kann direkt auf
+// der zitierten Seite stehen, oder erst auf einer verlinkten
+// "digitalMediaViewer"-Unterseite - beide Fälle werden versucht. Nicht
+// getestet: ob Arcinsys-Installationen anderer Bundesländer denselben
+// Linktext/dieselbe URL-Struktur verwenden.
+// ---------------------------------------------------------------------
+
+function extractDfgViewerLinkFromHtml(html, baseUrl) {
+  const re = /href=["']([^"']*dfg-viewer\.de[^"']*)["']/i;
+  const m = re.exec(html);
+  if (!m) return null;
+  return absoluteUrl(stripHtmlEntities(m[1]), baseUrl);
+}
+
+function extractDigitalMediaViewerLinkFromHtml(html, baseUrl) {
+  const re = /href=["']([^"']*digitalMediaViewer[^"']*)["']/i;
+  const m = re.exec(html);
+  if (!m) return null;
+  return absoluteUrl(stripHtmlEntities(m[1]), baseUrl);
+}
+
+function extractMetsUrlFromDfgLink(dfgLinkUrl) {
+  try {
+    const u = new URL(dfgLinkUrl);
+    return u.searchParams.get("tx_dlf[id]") || u.searchParams.get("set[mets]") || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function findDfgViewerLinkFromArcinsys(payload) {
+  const { url, pageNumber } = payload;
+  try {
+    let res = await fetch(url, { credentials: "omit" });
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status} beim Laden der Arcinsys-Seite` };
+    let html = await res.text();
+
+    let dfgLink = extractDfgViewerLinkFromHtml(html, url);
+    if (!dfgLink) {
+      // Nicht direkt gefunden -> ggf. über eine "digitalMediaViewer"-
+      // Unterseite verlinkt, die separat geladen werden muss.
+      const viewerPageUrl = extractDigitalMediaViewerLinkFromHtml(html, url);
+      if (viewerPageUrl) {
+        const res2 = await fetch(viewerPageUrl, { credentials: "omit" });
+        if (res2.ok) {
+          html = await res2.text();
+          dfgLink = extractDfgViewerLinkFromHtml(html, viewerPageUrl);
+        }
+      }
+    }
+
+    if (!dfgLink) {
+      return { ok: false, reason: "Konnte auf der Arcinsys-Seite keinen \"In DFG-Viewer öffnen\"-Link finden." };
+    }
+
+    const metsUrl = extractMetsUrlFromDfgLink(dfgLink);
+    if (!metsUrl) {
+      return { ok: false, reason: `DFG-Viewer-Link gefunden, aber keine METS-URL darin erkannt (${dfgLink}).` };
+    }
+
+    const suggestedUrl =
+      `https://dfg-viewer.de/show?tx_dlf%5Bid%5D=${encodeURIComponent(metsUrl)}` +
+      (pageNumber ? `&tx_dlf%5Bpage%5D=${encodeURIComponent(String(pageNumber))}` : "");
+
+    if (pageNumber) {
+      // Seitenzahl bekannt -> gleich die bereits bewährte METS-Logik nutzen,
+      // um direkt ein Bild mitzuliefern.
+      const imageResult = await fetchImageFromDfgViewerLink(suggestedUrl);
+      return { ok: imageResult.ok, suggestedUrl, ...imageResult };
+    }
+
+    return { ok: false, suggestedUrl, reason: "Passender DFG-Viewer-Link gefunden, aber keine Seitenzahl aus der Quellenbeschreibung bekannt - Quelle übernehmen und im Viewer die richtige Seite wählen." };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "FIND_DFG_VIEWER_LINK_FROM_ARCINSYS") {
+    findDfgViewerLinkFromArcinsys(msg.payload).then(sendResponse);
+    return true;
+  }
+});

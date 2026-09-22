@@ -220,18 +220,22 @@
 
   async function requestImageInfo(source) {
     if (source.domain === "arcinsys-direkt") {
-      // Dieser Link zeigt nur auf das Gesamtdokument, nicht auf eine
-      // bestimmte Seite - eine automatische Bildsuche würde hier nur
-      // raten, welche Seite gemeint ist. Deshalb bewusst kein Abruf,
-      // sondern ein klarer Hinweis zur manuellen Navigation, ergänzt um
-      // die Seitenzahl aus der ursprünglichen Quellenbeschreibung, falls
-      // dort vorhanden.
-      const pageHint = source.citedPageHint
-        ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.`
-        : "";
+      const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
+      const result = await chrome.runtime.sendMessage({
+        type: "FIND_DFG_VIEWER_LINK_FROM_ARCINSYS",
+        payload: { url: source.url, pageNumber }
+      });
+      if (result && result.suggestedUrl) {
+        source.suggestedUrl = result.suggestedUrl; // für "Quelle übernehmen"-Button im Panel
+      }
+      if (result && result.ok) {
+        return result; // enthält bereits imageUrl/label/pageNumber über die METS-Logik
+      }
+      const pageHint = pageNumber ? "" : source.citedPageHint ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.` : "";
       return {
         ok: false,
-        reason: `Link verweist nur auf das Gesamtdokument, nicht auf eine einzelne Seite - bitte im Dokument selbst zur passenden Seite navigieren und das Bild manuell herunterladen.${pageHint}`
+        reason: (result && result.reason) || `Link verweist nur auf das Gesamtdokument, nicht auf eine einzelne Seite.${pageHint}`,
+        suggestedUrl: result && result.suggestedUrl
       };
     }
     if (source.domain === "dfg-viewer" || source.domain === "landesarchiv-nrw-direkt") {
@@ -500,6 +504,26 @@
       } else {
         statusEl.textContent = `kein Bild automatisch gefunden – es wird nur der Link zitiert (${(info && info.reason) || "unbekannt"})`;
       }
+
+      if (info && info.suggestedUrl) {
+        const applyBtn = document.createElement("button");
+        applyBtn.className = "qba-apply-suggestion";
+        applyBtn.textContent = "💡 Quelle auf gefundenen DFG-Viewer-Link umstellen";
+        applyBtn.addEventListener("click", () => {
+          sources[i].url = info.suggestedUrl;
+          sources[i].domain = "dfg-viewer";
+          sources[i].imageInfo = null;
+          sources[i].linkText = info.suggestedUrl;
+          const oldRow = rowForIndex(i);
+          if (oldRow) oldRow.remove();
+          renderRow(i);
+        });
+        previewEl.appendChild(applyBtn);
+      }
+    }
+
+    function rowForIndex(i) {
+      return list.querySelector(`.qba-check[data-idx="${i}"]`)?.closest(".qba-row") || null;
     }
 
     panel.querySelector("#qba-check-images").addEventListener("click", async () => {

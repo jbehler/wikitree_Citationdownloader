@@ -203,3 +203,15 @@ body.qba-picking, body.qba-picking * {
   color: #555;
   font-style: italic;
 }
+
+.qba-apply-suggestion {
+  display: block;
+  margin-top: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid #ff9800;
+  background: #fff3e0;
+  color: #a05a00;
+  border-radius: 4px;
+  cursor: pointer;
+}
