@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "WikiTree Quellenbilder-Assistent",
+  "version": "0.9.1",
+  "description": "Findet matricula-online.eu- und DFG-Viewer/Landesarchiv-NRW-Links in einem geöffneten WikiTree-Profil und hilft, korrekte Quellenangaben (und wenn möglich eine Bildvorschau) in den Bio-Editor einzufügen.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://www.wikitree.com/*",
+    "https://*.matricula-online.eu/*",
+    "https://matricula-online.eu/*",
+    "https://*.landesarchiv-nrw.de/*",
+    "https://landesarchiv-nrw.de/*",
+    "https://dfg-viewer.de/*",
+    "https://*.arcinsys.hessen.de/*",
+    "https://arcinsys.hessen.de/*",
+    "https://*.arcinsys.de/*",
+    "http://*.arcinsys.de/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.wikitree.com/wiki/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
