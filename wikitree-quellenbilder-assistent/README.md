@@ -14,6 +14,26 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
 
+## Neu in Version 0.10.0
+
+- **Direkte Arcinsys-Links (Gesamtdokument statt Einzelseite) werden
+  jetzt erkannt.** Bisher wurden Links wie
+  `arcinsys.hessen.de/arcinsys/showArchivalDescriptionDetails?...` gar
+  nicht erst gefunden (fehlte im Erkennungs-Muster). Solche Links zeigen
+  auf das ganze Dokument, nicht auf eine bestimmte Seite - eine
+  automatische Bildsuche würde hier nur raten. Deshalb bewusst **kein**
+  automatischer Abruf für diesen Link-Typ: Die Extension zitiert den
+  Link (inkl. Institutionsname, ohne Lizenzbehauptung) und weist im
+  Panel klar darauf hin, im Dokument selbst zur passenden Seite zu
+  navigieren und das Bild manuell herunterzuladen.
+- **Seitenzahl-Hinweis aus der Quellenbeschreibung:** Falls im
+  unmittelbaren Textumfeld des Links auf WikiTree bereits eine
+  Seitenangabe steht (z. B. „S. 123“, „Seite 46“, „fol. 12“), wird das
+  erkannt und sowohl in der Zeile im Panel als auch im generierten Zitat
+  angezeigt („vermutlich Seite …“) - rein informativ zur Orientierung
+  beim manuellen Navigieren, keine Grundlage für einen automatischen
+  Bildabruf.
+
 ## Neu in Version 0.9.1
 
 - **Bugfix Arcinsys Hessen:** Die eigentlichen Bild-/METS-Dateien liegen

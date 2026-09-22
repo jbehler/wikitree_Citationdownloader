@@ -21,7 +21,7 @@
  */
 
 (function () {
-  const SOURCE_LINK_RE = /(matricula-online\.eu|dfg-viewer\.de|landesarchiv-nrw\.de)/i;
+  const SOURCE_LINK_RE = /(matricula-online\.eu|dfg-viewer\.de|landesarchiv-nrw\.de|arcinsys\.)/i;
   let manualTarget = null; // per Klick ausgewähltes Editor-Feld (Textarea oder contenteditable)
 
   // Bekannte Institutionen mit verifizierten Lizenzangaben. Für alles
@@ -76,6 +76,19 @@
       const known = KNOWN_INSTITUTIONS["landesarchiv-nrw.de"];
       return { name: known.name, citationLicenseNote: known.citationLicenseNote };
     }
+    if (source.domain === "arcinsys-direkt") {
+      let host = null;
+      try {
+        host = new URL(source.url).hostname;
+      } catch (e) {
+        /* ignorieren */
+      }
+      const known = host && KNOWN_INSTITUTIONS[host];
+      return {
+        name: (known && known.name) || humanizeHost(host) || "Arcinsys",
+        citationLicenseNote: known ? known.citationLicenseNote : null
+      };
+    }
     return null;
   }
 
@@ -83,7 +96,20 @@
     if (/dfg-viewer\.de/i.test(href)) return "dfg-viewer";
     if (/matricula-online\.eu/i.test(href)) return "matricula";
     if (/landesarchiv-nrw\.de/i.test(href)) return "landesarchiv-nrw-direkt";
+    if (/arcinsys\./i.test(href)) return "arcinsys-direkt";
     return "unbekannt";
+  }
+
+  function extractPageHintFromContext(anchor) {
+    // Rein informativ: sucht im nahen Textumfeld des Links nach einer
+    // Seitenangabe wie "S. 123", "Seite 123", "p. 123", "fol. 123" - so,
+    // wie sie oft schon in der ursprünglichen Quellenbeschreibung auf
+    // WikiTree steht. Keine Grundlage für automatischen Bildabruf, nur
+    // eine Orientierungshilfe für die manuelle Navigation.
+    const container = anchor.closest("li, p, div") || anchor.parentElement;
+    const text = container ? container.textContent : "";
+    const m = /\b(?:S\.?|Seite|p\.?|pag\.?|fol\.?)\s*(\d+)\b/i.exec(text || "");
+    return m ? m[1] : null;
   }
 
   function findSourceLinks() {
@@ -97,7 +123,8 @@
         results.push({
           url: href,
           domain: classifyDomain(href),
-          linkText: (a.textContent || "").trim().slice(0, 80)
+          linkText: (a.textContent || "").trim().slice(0, 80),
+          citedPageHint: extractPageHintFromContext(a)
         });
       }
     }
@@ -123,6 +150,13 @@
           `Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung ` +
           `direkt bei ${info.name} nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.`;
       }
+    } else if (source.domain === "arcinsys-direkt") {
+      const info = institutionInfoForSource(source);
+      const pageHint = source.citedPageHint ? ` (vermutlich Seite ${source.citedPageHint})` : "";
+      citation =
+        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Link verweist auf das Gesamtdokument, ` +
+        `bitte im Dokument selbst zur passenden Seite navigieren. Lizenz-/Nutzungsbedingungen nicht bekannt ` +
+        `(nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei ${info.name} nachsehen.`;
     } else {
       citation =
         `* Digitalisat: [${source.url} unbekanntes Archiv] – ` +
@@ -185,6 +219,21 @@
   }
 
   async function requestImageInfo(source) {
+    if (source.domain === "arcinsys-direkt") {
+      // Dieser Link zeigt nur auf das Gesamtdokument, nicht auf eine
+      // bestimmte Seite - eine automatische Bildsuche würde hier nur
+      // raten, welche Seite gemeint ist. Deshalb bewusst kein Abruf,
+      // sondern ein klarer Hinweis zur manuellen Navigation, ergänzt um
+      // die Seitenzahl aus der ursprünglichen Quellenbeschreibung, falls
+      // dort vorhanden.
+      const pageHint = source.citedPageHint
+        ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.`
+        : "";
+      return {
+        ok: false,
+        reason: `Link verweist nur auf das Gesamtdokument, nicht auf eine einzelne Seite - bitte im Dokument selbst zur passenden Seite navigieren und das Bild manuell herunterladen.${pageHint}`
+      };
+    }
     if (source.domain === "dfg-viewer" || source.domain === "landesarchiv-nrw-direkt") {
       return chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_DFG_VIEWER", url: source.url });
     }
@@ -310,6 +359,10 @@
       const info = institutionInfoForSource(source);
       return source.domain === "dfg-viewer" ? `${info.name} (DFG-Viewer)` : info.name;
     }
+    if (source.domain === "arcinsys-direkt") {
+      const info = institutionInfoForSource(source);
+      return `${info.name} (Gesamtdokument)`;
+    }
     return "Quelle";
   }
 
@@ -381,6 +434,7 @@
           <a href="${s.url}" target="_blank" rel="noopener">${s.linkText || s.url}</a>
         </label>
         ${isMetsBased(s.domain) ? `<button class="qba-nextpage" data-idx="${i}" title="Lädt dieselbe Quelle mit Seite+1 - praktisch bei Heiratsregistern über zwei Seiten">➕ Folgeseite auch laden</button>` : ""}
+        ${s.domain === "arcinsys-direkt" && s.citedPageHint ? `<div class="qba-pagehint">Laut Quellenbeschreibung vermutlich Seite ${s.citedPageHint}</div>` : ""}
         <div class="qba-status" id="qba-status-${i}">noch nicht geprüft</div>
         <div class="qba-preview" id="qba-preview-${i}"></div>
       `;
