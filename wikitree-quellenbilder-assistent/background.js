@@ -57,6 +57,23 @@ function absoluteUrl(maybeRelative, baseUrl) {
   }
 }
 
+// Fetch mit Zeitlimit: Ein hängender Server (oder blockierender Proxy) soll
+// die Antwort an den Content-Script nicht unbegrenzt blockieren - ein MV3-
+// Service Worker kann sonst inzwischen sogar gekillt werden und die Antwort
+// wäre verloren. Besser bewusst abbrechen und verständlich melden.
+function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal })
+    .catch((e) => {
+      if (e && e.name === "AbortError") {
+        throw new Error(`Timeout nach ${Math.round(timeoutMs / 1000)}s beim Laden von ${url}`);
+      }
+      throw e;
+    })
+    .finally(() => clearTimeout(timer));
+}
+
 // Liest ein Attribut aus einem Attribut-String, tolerant gegenüber
 // doppelten UND einfachen Anführungszeichen.
 function getAttr(attrString, name) {
@@ -119,9 +136,16 @@ function extractFileGroups(xmlText, baseUrl) {
     while ((fm = fileRe.exec(inner)) !== null) {
       const id = getAttr(fm[1], "ID");
       const body = fm[2] || "";
+      // href kann in zwei Formen vorliegen: selbstschließend
+      // (<file ID="…" xlink:href="…"/>) -> im Attribut-String, oder mit
+      // <FLocat>-Kind (<file …><FLocat xlink:href="…"/></file>,
+      // Kitodo-typisch) -> im Element-Inhalt. Vorher wurde nur im Inhalt
+      // gesucht, weshalb selbstschließende file-Elemente stillschweigend
+      // übergangen wurden (keine URL im fileSec zugeordnet).
+      const attrAndBody = fm[1] + " " + body;
       const hrefMatch =
-        /xlink:href\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(body) ||
-        /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(body);
+        /xlink:href\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attrAndBody) ||
+        /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attrAndBody);
       const href = hrefMatch ? hrefMatch[1] || hrefMatch[2] : null;
       if (id && href) {
         const abs = absoluteUrl(href, baseUrl);
@@ -204,14 +228,29 @@ function pickBestUrl(fileMap, fileIds) {
   return null;
 }
 
+function safeFromCodePoint(code) {
+  // Ungültige CodePoints (z.B. 0 oder Surrogate-Hälften) -> leer, statt
+  // eine Exception zu werfen oder ein defektes Zeichen zu erzeugen.
+  if (!Number.isFinite(code) || code < 1 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return "";
+  try {
+    return String.fromCodePoint(code);
+  } catch (e) {
+    return "";
+  }
+}
+
 function stripHtmlEntities(text) {
+  // Benannte Entities und numerische Entities (dezimal + hex). &amp; wird
+  // ZULETZT ersetzt, damit doppelt kodierte Folgen wie "&amp;#39;" nicht
+  // zweifach dekodiert werden.
   return text
-    .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&nbsp;/g, " ")
+    .replace(/&#x([0-9a-f]+);/gi, (m, h) => safeFromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (m, d) => safeFromCodePoint(parseInt(d, 10)))
+    .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -222,7 +261,7 @@ function stripHtmlEntities(text) {
 // Bild selbst schon über die METS-Datei gefunden wurde.
 async function fetchDfgViewerTitleLabel(dfgUrl) {
   try {
-    const res = await fetch(dfgUrl, { credentials: "omit" });
+    const res = await fetchWithTimeout(dfgUrl, { credentials: "omit" });
     if (!res.ok) return null;
     const html = await res.text();
     const m = /<dd[^>]*class=["'][^"']*\btx-dlf-title\b[^"']*["'][^>]*>([\s\S]*?)<\/dd>/i.exec(html);
@@ -240,7 +279,7 @@ async function fetchImageFromDfgViewerLink(dfgUrl) {
     return { ok: false, reason: "Konnte METS-URL/Seitenzahl nicht aus dem DFG-Viewer-Link lesen" };
   }
   try {
-    const res = await fetch(parsed.metsUrl, { credentials: "omit" });
+    const res = await fetchWithTimeout(parsed.metsUrl, { credentials: "omit" });
     if (!res.ok) {
       return { ok: false, reason: `HTTP ${res.status} beim Laden der METS-Datei (${parsed.metsUrl})` };
     }
@@ -365,7 +404,7 @@ function combineMatriculaLabel(meta) {
 
 async function fetchAndFindImageGeneric(url) {
   try {
-    const res = await fetch(url, { credentials: "omit" });
+    const res = await fetchWithTimeout(url, { credentials: "omit" });
     if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
     const html = await res.text();
     const meta = extractMatriculaMetaFromHtml(html);
@@ -381,17 +420,6 @@ async function fetchAndFindImageGeneric(url) {
     return { ok: false, reason: String(e) };
   }
 }
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.type === "FIND_IMAGE_FOR_URL") {
-    fetchAndFindImageGeneric(msg.url).then(sendResponse);
-    return true;
-  }
-  if (msg && msg.type === "FIND_IMAGE_FOR_DFG_VIEWER") {
-    fetchImageFromDfgViewerLink(msg.url).then(sendResponse);
-    return true;
-  }
-});
 
 // ---------------------------------------------------------------------
 // Weg 3: Matricula-Fallback über einen kurz aktiven Tab
@@ -682,13 +710,6 @@ async function fetchImageViaHiddenTab(url) {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.type === "FIND_IMAGE_VIA_HIDDEN_TAB") {
-    fetchImageViaHiddenTab(msg.url).then(sendResponse);
-    return true;
-  }
-});
-
 // ---------------------------------------------------------------------
 // Gebündelter Download aller gefundenen Bilder in einen benannten Ordner
 // -----------------------------------------------------------------------
@@ -703,11 +724,32 @@ function sanitizeForFilesystem(name) {
   // Entfernt/ersetzt Zeichen, die unter Windows/macOS/Linux in Datei-
   // oder Ordnernamen nicht erlaubt sind. Unicode-Buchstaben (ä, ö, ß, …)
   // bleiben erhalten - die sind auf allen gängigen Dateisystemen zulässig.
-  return name
+  const cleaned = (name || "")
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/[.\s]+$/, "") || "Quelle";
+    .replace(/[.\s]+$/, "");
+  // Windows-reservierte Gerätenamen (CON, NUL, COM1 …) sind als reiner
+  // Datei-/Ordnername unzulässig - Präfix voranstellen, statt
+  // stillschweigend einen ungültigen Namen zu erzeugen.
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(cleaned)) {
+    return "_" + cleaned;
+  }
+  return cleaned || "Quelle";
+}
+
+// btoa erwartet einen "binary string" (ein Zeichen pro Byte). Der alte
+// Trick `btoa(unescape(encodeURIComponent(s)))` nutzt das deprecated
+// unescape() - ersetzt durch TextEncoder, blockweise, um Stack-Limits
+// bei sehr langen Strings zu vermeiden.
+function utf8ToBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
 async function bulkDownload(payload) {
@@ -716,7 +758,7 @@ async function bulkDownload(payload) {
 
   if (payload.citationsText) {
     try {
-      const b64 = btoa(unescape(encodeURIComponent(payload.citationsText)));
+      const b64 = utf8ToBase64(payload.citationsText);
       await chrome.downloads.download({
         url: `data:text/plain;charset=utf-8;base64,${b64}`,
         filename: `${folder}/Quellenangaben.txt`,
@@ -743,13 +785,6 @@ async function bulkDownload(payload) {
 
   return { folder, results };
 }
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.type === "BULK_DOWNLOAD") {
-    bulkDownload(msg.payload).then(sendResponse);
-    return true;
-  }
-});
 
 // ---------------------------------------------------------------------
 // Arcinsys-Direktlinks: passenden DFG-Viewer-Link finden und vorschlagen
@@ -796,7 +831,7 @@ function extractMetsUrlFromDfgLink(dfgLinkUrl) {
 async function findDfgViewerLinkFromArcinsys(payload) {
   const { url, pageNumber } = payload;
   try {
-    let res = await fetch(url, { credentials: "omit" });
+    let res = await fetchWithTimeout(url, { credentials: "omit" });
     if (!res.ok) return { ok: false, reason: `HTTP ${res.status} beim Laden der Arcinsys-Seite` };
     let html = await res.text();
 
@@ -806,7 +841,7 @@ async function findDfgViewerLinkFromArcinsys(payload) {
       // Unterseite verlinkt, die separat geladen werden muss.
       const viewerPageUrl = extractDigitalMediaViewerLinkFromHtml(html, url);
       if (viewerPageUrl) {
-        const res2 = await fetch(viewerPageUrl, { credentials: "omit" });
+        const res2 = await fetchWithTimeout(viewerPageUrl, { credentials: "omit" });
         if (res2.ok) {
           html = await res2.text();
           dfgLink = extractDfgViewerLinkFromHtml(html, viewerPageUrl);
@@ -840,13 +875,6 @@ async function findDfgViewerLinkFromArcinsys(payload) {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.type === "FIND_DFG_VIEWER_LINK_FROM_ARCINSYS") {
-    findDfgViewerLinkFromArcinsys(msg.payload).then(sendResponse);
-    return true;
-  }
-});
-
 // ---------------------------------------------------------------------
 // Landesarchiv Baden-Württemberg (plink): Formular-Submit statt Link
 // -----------------------------------------------------------------------
@@ -865,6 +893,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
   let tab = null;
+  let removeFilenameListener = null; // Cleanup für den onDeterminingFilename-Listener
 
   try {
     tab = await chrome.tabs.create({ url: plinkUrl, active: false });
@@ -882,38 +911,46 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
       }, 10000);
     });
 
-    // WICHTIG (Bugfix): onDeterminingFilename feuert typischerweise ERST
-    // NACH onCreated (Chrome muss dafür ggf. erst Header wie
-    // Content-Disposition auswerten). Der Listener darf deshalb nicht
-    // schon entfernt werden, sobald downloadPromise (onCreated) aufgelöst
-    // ist - das hätte den eigenen Vorschlag nie wirksam werden lassen und
-    // erklärt frühere Fehlschläge (Datei landete unbenannt im
-    // Standard-Downloads-Ordner). Stattdessen wird separat auf das
-    // tatsächliche Feuern von onDeterminingFilename gewartet (mit
-    // Timeout als Sicherheitsnetz, damit der Listener nicht unbegrenzt
-    // hängen bleibt, falls der Download aus irgendeinem Grund keinen
-    // Dateinamen bestimmt).
-    let listenerActive = true;
+    // WICHTIG (Bugfix 0.13.1, in 0.14.0 verfeinert): onDeterminingFilename
+    // feuert typischerweise ERST NACH onCreated (Chrome muss dafür ggf.
+    // erst Header wie Content-Disposition auswerten). Der Listener darf
+    // deshalb nicht schon entfernt werden, sobald downloadPromise
+    // (onCreated) aufgelöst ist - das hätte den eigenen Vorschlag nie
+    // wirksam werden lassen und erklärt frühere Fehlschläge (Datei landete
+    // unbenannt im Standard-Downloads-Ordner).
+    //
+    // Verfeinerung 0.14.0: Der Listener wird weiterhin VOR dem Submit
+    // registriert, aber der 8-Sekunden-Sicherheitsnetz-Timeout startet jetzt
+    // erst, wenn der Download tatsächlich registriert wurde - vorher hätte
+    // der Timeout den Listener löschen können, während der Download bei
+    // einem langsamen Server noch gar nicht anlief. Zusätzlich wird der
+    // Listener auf ALLEN Abbruchwegen aufgeräumt (kein Formular, kein
+    // Download, Fehler), damit er nicht unnötig registriert bleibt.
+    let filenameListenerActive = true;
+    let filenameTimeoutId = null;
+    let resolveFilenameDetermination = null;
     const filenameDeterminedPromise = new Promise((resolve) => {
-      function onDeterminingFilename(item, suggest) {
-        chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
-        listenerActive = false;
-        const extMatch = /\.[a-z0-9]{2,5}$/i.exec(item.filename || "");
-        const ext = extMatch ? extMatch[0] : "";
-        const safeFolder = sanitizeForFilesystem(folder);
-        const safeBase = sanitizeForFilesystem(suggestedNameBase);
-        suggest({ filename: `${safeFolder}/${safeBase}${ext}` });
-        resolve(true);
-      }
-      chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
-      setTimeout(() => {
-        if (listenerActive) {
-          chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
-          listenerActive = false;
-        }
-        resolve(false);
-      }, 8000);
+      resolveFilenameDetermination = resolve;
     });
+    function onDeterminingFilename(item, suggest) {
+      chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
+      filenameListenerActive = false;
+      if (filenameTimeoutId) clearTimeout(filenameTimeoutId);
+      const extMatch = /\.[a-z0-9]{2,5}$/i.exec(item.filename || "");
+      const ext = extMatch ? extMatch[0] : "";
+      const safeFolder = sanitizeForFilesystem(folder);
+      const safeBase = sanitizeForFilesystem(suggestedNameBase);
+      suggest({ filename: `${safeFolder}/${safeBase}${ext}` });
+      resolveFilenameDetermination(true);
+    }
+    chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
+    removeFilenameListener = () => {
+      if (filenameTimeoutId) clearTimeout(filenameTimeoutId);
+      if (filenameListenerActive) {
+        chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
+        filenameListenerActive = false;
+      }
+    };
 
     const execResult = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -933,15 +970,30 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
 
     const submitted = !!(execResult && execResult[0] && execResult[0].result && execResult[0].result.submitted);
     if (!submitted) {
+      removeFilenameListener();
       return { ok: false, reason: "Formular \"pdfForm\" (bzw. ein Formular mit download.php-Ziel) wurde auf der Seite nicht gefunden." };
     }
 
     const item = await downloadPromise;
     if (!item) {
+      removeFilenameListener();
       return { ok: false, reason: "Formular wurde abgeschickt, aber innerhalb von 10 Sekunden wurde kein Download registriert." };
     }
 
+    // Sicherheitsnetz-Timeout erst ab jetzt: Der Download ist registriert,
+    // jetzt darf 8s lang auf die Dateinamens-Bestimmung gewartet werden.
+    if (filenameListenerActive) {
+      filenameTimeoutId = setTimeout(() => {
+        if (filenameListenerActive) {
+          chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
+          filenameListenerActive = false;
+        }
+        resolveFilenameDetermination(false);
+      }, 8000);
+    }
+
     const filenameApplied = await filenameDeterminedPromise;
+    if (filenameTimeoutId) clearTimeout(filenameTimeoutId);
     if (!filenameApplied) {
       return { ok: true, downloadId: item.id, reason: "Download gestartet, aber der Ordner-/Namensvorschlag griff nicht rechtzeitig - Datei liegt vermutlich im Standard-Downloads-Ordner mit Standard-Namen." };
     }
@@ -949,6 +1001,7 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
   } catch (e) {
     return { ok: false, reason: String(e) };
   } finally {
+    if (removeFilenameListener) removeFilenameListener();
     if (tab && tab.id) {
       try {
         await chrome.tabs.remove(tab.id);
@@ -959,10 +1012,33 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
   }
 }
 
+// Ein zentraler Message-Handler statt fünf separater addListener-Blöcke:
+// gleiche Semantik (sendResponse + return true für die asynchrone Antwort),
+// aber alle unterstützten Nachrichtentypen an einem Ort sichtbar.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.type === "SUBMIT_FORM_AND_DOWNLOAD") {
-    const { url, folder, suggestedNameBase } = msg.payload || {};
-    submitFormAndDownload(url, folder, suggestedNameBase).then(sendResponse);
-    return true;
+  if (!msg || !msg.type) return undefined;
+  switch (msg.type) {
+    case "FIND_IMAGE_FOR_URL":
+      fetchAndFindImageGeneric(msg.url).then(sendResponse);
+      return true;
+    case "FIND_IMAGE_FOR_DFG_VIEWER":
+      fetchImageFromDfgViewerLink(msg.url).then(sendResponse);
+      return true;
+    case "FIND_IMAGE_VIA_HIDDEN_TAB":
+      fetchImageViaHiddenTab(msg.url).then(sendResponse);
+      return true;
+    case "BULK_DOWNLOAD":
+      bulkDownload(msg.payload).then(sendResponse);
+      return true;
+    case "FIND_DFG_VIEWER_LINK_FROM_ARCINSYS":
+      findDfgViewerLinkFromArcinsys(msg.payload).then(sendResponse);
+      return true;
+    case "SUBMIT_FORM_AND_DOWNLOAD": {
+      const { url, folder, suggestedNameBase } = msg.payload || {};
+      submitFormAndDownload(url, folder, suggestedNameBase).then(sendResponse);
+      return true;
+    }
+    default:
+      return undefined;
   }
 });

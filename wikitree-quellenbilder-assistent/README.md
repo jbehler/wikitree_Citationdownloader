@@ -14,6 +14,41 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
 
+## Neu in Version 0.14.0
+
+- **Stabilität/Robustheit (background.js):** Alle externen HTTP-Abrufe
+  laufen jetzt über einen gemeinsamen Fetch-Helper mit 20-Sekunden-Timeout
+  (`AbortController`). Hängende Server blockieren die Bildersuche nicht
+  mehr unbegrenzt; stattdessen erscheint eine verständliche
+  Fehlermeldung.
+- **Landesarchiv-BW-Download nochmal präzisiert:** Der Sicherheitsnetz-
+  Timeout für die Dateinamens-Umleitung startet jetzt erst, wenn der
+  Download tatsächlich registriert wurde - bei langsamen Servern wird der
+  vorgeschlagene Ordner-/Dateiname nun zuverlässiger angewendet. Der
+  Listener wird zudem auf allen Abbruchwegen (kein Formular gefunden,
+  kein Download, Fehler) aufgeräumt.
+- **Windows-Dateinamen:** Reservierte Namen wie `CON`, `NUL`, `COM1` …
+  als Ordner-/Dateiname bekommen jetzt ein `_` vorangestellt, statt
+  einen ungültigen Download-Namen zu erzeugen.
+- **Sicherheitsfix im Panel:** Linktexte und URLs aus den
+  Quellenangaben werden nur noch über sichere DOM-APIs ins Panel
+  geschrieben - dort eingeschleustes HTML (z. B. über
+  `<script>`-Text in einer Quelle) kann die Extension-UI nicht mehr
+  manipulieren.
+- **Zielfeld-Auswahl:** Der Auswahlmodus lässt sich jetzt mit `Esc`
+  abbrechen und wird sauber aufgeräumt (auch bei erneutem Klick oder
+  beim Schließen des Panels).
+- **Sources-Header:** Vorhandene Überschriften wie `== Sources ==`
+  oder `=== Sources ===` werden zeilengenau erkannt - sie bleiben beim
+  Einfügen unverändert, die neuen Quellenzeilen landen direkt darunter
+  (zuvor konnte der einfache String-Ersatz solche Header zerlegen).
+- **„Bildvorschau prüfen“:** Doppelklick startet keinen zweiten
+  Prüflauf mehr; bereits geprüfte Quellen werden aus dem Cache
+  angezeigt statt erneut angefragt.
+- **Aufräumarbeiten:** Ein zentraler Message-Handler statt fünf
+  separater Listener; `unescape()` durch `TextEncoder`-basierte
+  Base64-Kodierung ersetzt (kein Deprecated-API mehr).
+
 ## Neu in Version 0.13.1
 
 - **Bugfix Landesarchiv-BW-Download (Ordner/Dateiname wurden ignoriert):**

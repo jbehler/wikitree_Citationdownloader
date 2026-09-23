@@ -22,6 +22,7 @@
 
 (function () {
   let manualTarget = null; // per Klick ausgewähltes Editor-Feld (Textarea oder contenteditable)
+  let activePickingCancel = null; // Cleanup-Funktion, solange der Ziel-Auswahlmodus läuft
 
   // Bekannte Institutionen mit verifizierten Lizenzangaben. Für alles
   // andere (z.B. Arcinsys Hessen) wird NICHT einfach dieselbe Lizenz
@@ -371,16 +372,30 @@
       if (!isUsableTarget(e.target)) return; // weiter auf brauchbares Ziel warten
       e.preventDefault();
       e.stopPropagation();
-      document.removeEventListener("click", clickHandler, true);
-      document.removeEventListener("mouseover", highlightHandler, true);
-      document.body.classList.remove("qba-picking");
-      document.querySelectorAll(".qba-hover-candidate").forEach((n) => n.classList.remove("qba-hover-candidate"));
+      cleanup();
       manualTarget = e.target;
       onPicked(e.target);
     }
 
+    function keyHandler(e) {
+      if (e.key === "Escape") {
+        cleanup();
+        onPicked(null); // Abbruch an den Aufrufer signalisieren
+      }
+    }
+
+    function cleanup() {
+      document.removeEventListener("click", clickHandler, true);
+      document.removeEventListener("mouseover", highlightHandler, true);
+      document.removeEventListener("keydown", keyHandler, true);
+      document.body.classList.remove("qba-picking");
+      document.querySelectorAll(".qba-hover-candidate").forEach((n) => n.classList.remove("qba-hover-candidate"));
+    }
+
     document.addEventListener("mouseover", highlightHandler, true);
     document.addEventListener("click", clickHandler, true);
+    document.addEventListener("keydown", keyHandler, true);
+    return cleanup; // zum externen Aufräumen (z. B. beim Schließen des Panels)
   }
 
   function tryFindBioTextareaAuto() {
@@ -401,13 +416,25 @@
     return textareas[0];
   }
 
+  // Zeilenbasierte Erkennung des Sources-Headers: matcht "== Sources ==",
+  // "==Sources==", "=== Sources ===" usw. Der bisherige einfache
+  // String-Replace von "== Sources ==" hätte z. B. in "=== Sources ==="
+  // das Teil-Stück mittendrin ersetzt und den Header zerlegt.
+  const SOURCES_HEADER_RE = /^[ \t]*(={2,4})[ \t]*Sources[ \t]*\1[ \t]*$/im;
+
   function insertTextIntoElement(el, fullText) {
     const marker = "== Sources ==";
     if (el.tagName === "TEXTAREA") {
       const current = el.value;
-      const newValue = current.includes(marker)
-        ? current.replace(marker, `${marker}\n${fullText}`)
-        : current.replace(/\s*$/, "") + `\n\n${marker}\n${fullText}\n`;
+      const headerMatch = SOURCES_HEADER_RE.exec(current);
+      let newValue;
+      if (headerMatch) {
+        // Direkt unter den vorhandenen Sources-Header einfügen.
+        const insertAt = headerMatch.index + headerMatch[0].length;
+        newValue = current.slice(0, insertAt) + "\n" + fullText + current.slice(insertAt);
+      } else {
+        newValue = current.replace(/\s*$/, "") + `\n\n${marker}\n${fullText}\n`;
+      }
       el.value = newValue;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -484,7 +511,7 @@
           <span id="qba-target-status">Ziel-Editor-Feld: nicht ausgewählt (Auto-Erkennung wird versucht)</span>
           <button id="qba-pick-target">🎯 Zielfeld wählen</button>
         </div>
-        <p class="qba-hint">Gefundene Links zu Matricula / Landesarchiv NRW auf dieser Seite:</p>
+        <p class="qba-hint">Externe Quellen-Links auf dieser Seite (z. B. Matricula, Landesarchive, DFG-Viewer):</p>
         <div id="qba-list"></div>
         <div id="qba-actions">
           <button id="qba-check-images">Bildvorschau prüfen</button>
@@ -503,10 +530,17 @@
     document.body.appendChild(panel);
 
     panel.querySelector("#qba-pick-target").addEventListener("click", () => {
-      panel.querySelector("#qba-target-status").textContent = "Bitte jetzt auf das Bio-Textfeld im Editor klicken …";
-      startPickingTarget((el) => {
+      if (activePickingCancel) activePickingCancel(); // laufenden Auswahlmodus sauber beenden
+      const statusEl = panel.querySelector("#qba-target-status");
+      statusEl.textContent = "Bitte jetzt auf das Bio-Textfeld im Editor klicken (Esc bricht ab) …";
+      activePickingCancel = startPickingTarget((el) => {
+        activePickingCancel = null;
+        if (!el) {
+          statusEl.textContent = "Zielfeld-Auswahl abgebrochen - Auto-Erkennung wird weiterhin versucht.";
+          return;
+        }
         const desc = el.tagName === "TEXTAREA" ? `<textarea>${el.id ? "#" + el.id : ""}` : `contenteditable-Element${el.id ? " #" + el.id : ""}`;
-        panel.querySelector("#qba-target-status").textContent = `Zielfeld ausgewählt: ${desc} ✓`;
+        statusEl.textContent = `Zielfeld ausgewählt: ${desc} ✓`;
       });
     });
 
@@ -532,17 +566,52 @@
       const s = sources[i];
       const row = document.createElement("div");
       row.className = "qba-row";
-      row.innerHTML = `
-        <label>
-          <input type="checkbox" class="qba-check" data-idx="${i}" checked>
-          <span class="qba-domain">${domainLabel(s)}</span>
-          <a href="${s.url}" target="_blank" rel="noopener">${s.linkText || s.url}</a>
-        </label>
-        ${isMetsBased(s.domain) ? `<button class="qba-nextpage" data-idx="${i}" title="Lädt dieselbe Quelle mit Seite+1 - praktisch bei Heiratsregistern über zwei Seiten">➕ Folgeseite auch laden</button>` : ""}
-        ${s.domain === "arcinsys-direkt" && s.citedPageHint ? `<div class="qba-pagehint">Laut Quellenbeschreibung vermutlich Seite ${s.citedPageHint}</div>` : ""}
-        <div class="qba-status" id="qba-status-${i}">noch nicht geprüft</div>
-        <div class="qba-preview" id="qba-preview-${i}"></div>
-      `;
+
+      // Bewusst DOM-API statt innerHTML: Linktext und URL stammen 1:1 aus
+      // der WikiTree-Seite (Nutzer-Inhalt in den Quellenangaben). Über
+      // innerHTML interpoliert könnte solcher Text HTML in das Panel
+      // einschleusen oder das Markup zerstören - textContent und per
+      // DOM-API gesetzte Attribute sind dagegen immer sicher.
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "qba-check";
+      checkbox.dataset.idx = String(i);
+      checkbox.checked = true;
+      const domainSpan = document.createElement("span");
+      domainSpan.className = "qba-domain";
+      domainSpan.textContent = domainLabel(s);
+      const link = document.createElement("a");
+      link.href = s.url; // findSourceLinks lässt nur https?://-URLs durch
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = s.linkText || s.url;
+      label.append(checkbox, domainSpan, link);
+      row.appendChild(label);
+
+      if (isMetsBased(s.domain)) {
+        const nextBtn = document.createElement("button");
+        nextBtn.className = "qba-nextpage";
+        nextBtn.dataset.idx = String(i);
+        nextBtn.title = "Lädt dieselbe Quelle mit Seite+1 - praktisch bei Heiratsregistern über zwei Seiten";
+        nextBtn.textContent = "➕ Folgeseite auch laden";
+        row.appendChild(nextBtn);
+      }
+      if (s.domain === "arcinsys-direkt" && s.citedPageHint) {
+        const pageHint = document.createElement("div");
+        pageHint.className = "qba-pagehint";
+        pageHint.textContent = `Laut Quellenbeschreibung vermutlich Seite ${s.citedPageHint}`;
+        row.appendChild(pageHint);
+      }
+      const statusEl = document.createElement("div");
+      statusEl.className = "qba-status";
+      statusEl.id = `qba-status-${i}`;
+      statusEl.textContent = "noch nicht geprüft";
+      row.appendChild(statusEl);
+      const previewEl = document.createElement("div");
+      previewEl.className = "qba-preview";
+      previewEl.id = `qba-preview-${i}`;
+      row.appendChild(previewEl);
       list.appendChild(row);
 
       const nextBtn = row.querySelector(".qba-nextpage");
@@ -591,12 +660,12 @@
         previewEl.appendChild(img);
 
         if (info.caveat) {
-        const note = document.createElement("div");
-        note.className = "qba-caveat";
-        note.textContent = `⚠ ${info.caveat}`;
-        previewEl.appendChild(note);
-      }
-      const dl = document.createElement("a");
+          const note = document.createElement("div");
+          note.className = "qba-caveat";
+          note.textContent = `⚠ ${info.caveat}`;
+          previewEl.appendChild(note);
+        }
+        const dl = document.createElement("a");
         dl.href = info.imageUrl;
         dl.download = `${buildFileLabel(sources[i], info)}.${guessExtension(info)}`;
         dl.target = "_blank";
@@ -629,32 +698,42 @@
       return list.querySelector(`.qba-check[data-idx="${i}"]`)?.closest(".qba-row") || null;
     }
 
-    panel.querySelector("#qba-check-images").addEventListener("click", async () => {
-      for (let i = 0; i < sources.length; i++) {
-        if (sources[i].imageInfo) {
-          // Bereits geprüft -> aus Cache erneut anzeigen statt neu zu laden
-          // (verhindert unnötige Doppel-Anfragen bei wiederholtem Klick).
+    const checkBtn = panel.querySelector("#qba-check-images");
+    let checking = false;
+    checkBtn.addEventListener("click", async () => {
+      if (checking) return; // Doppelklick: keine parallelen Prüfläufe (doppelte Anfragen/Fenster)
+      checking = true;
+      checkBtn.disabled = true;
+      try {
+        for (let i = 0; i < sources.length; i++) {
+          if (sources[i].imageInfo) {
+            // Bereits geprüft -> aus Cache erneut anzeigen statt neu zu laden
+            // (verhindert unnötige Doppel-Anfragen bei wiederholtem Klick).
+            renderResult(i);
+            continue;
+          }
+          const statusEl = panel.querySelector(`#qba-status-${i}`);
+          statusEl.textContent = "prüfe …";
+          try {
+            sources[i].imageInfo = await requestImageInfo(sources[i]);
+          } catch (e) {
+            sources[i].imageInfo = { ok: false, reason: String(e) };
+          }
           renderResult(i);
-          continue;
+          // Kleine Pause zwischen aufeinanderfolgenden Prüfungen - falls die
+          // Ursache für Fehlschläge bei mehreren Matricula-Quellen ein
+          // serverseitiges Rate-Limit oder eine Race Condition beim
+          // Fenster-Fokus-Wechsel ist, mindert das die Wahrscheinlichkeit.
+          if (i < sources.length - 1) {
+            await new Promise((r) => setTimeout(r, 1200));
+          }
         }
-        const statusEl = panel.querySelector(`#qba-status-${i}`);
-        statusEl.textContent = "prüfe …";
-        try {
-          sources[i].imageInfo = await requestImageInfo(sources[i]);
-        } catch (e) {
-          sources[i].imageInfo = { ok: false, reason: String(e) };
-        }
-        renderResult(i);
-        // Kleine Pause zwischen aufeinanderfolgenden Prüfungen - falls die
-        // Ursache für Fehlschläge bei mehreren Matricula-Quellen ein
-        // serverseitiges Rate-Limit oder eine Race Condition beim
-        // Fenster-Fokus-Wechsel ist, mindert das die Wahrscheinlichkeit.
-        if (i < sources.length - 1) {
-          await new Promise((r) => setTimeout(r, 1200));
-        }
+      } finally {
+        checking = false;
+        checkBtn.disabled = false;
+        panel.querySelector("#qba-insert").disabled = false;
+        panel.querySelector("#qba-download-all").disabled = false;
       }
-      panel.querySelector("#qba-insert").disabled = false;
-      panel.querySelector("#qba-download-all").disabled = false;
     });
 
     panel.querySelector("#qba-insert").addEventListener("click", () => {
@@ -750,7 +829,10 @@
       }
     });
 
-    panel.querySelector("#qba-close").addEventListener("click", () => panel.remove());
+    panel.querySelector("#qba-close").addEventListener("click", () => {
+      if (activePickingCancel) activePickingCancel(); // laufenden Auswahlmodus sauber beenden
+      panel.remove();
+    });
   }
 
   function createLaunchButton(sources) {
