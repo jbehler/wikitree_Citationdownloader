@@ -14,6 +14,44 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
 
+## Neu in Version 0.13.1
+
+- **Bugfix Landesarchiv-BW-Download (Ordner/Dateiname wurden ignoriert):**
+  Der `onDeterminingFilename`-Listener wurde bisher entfernt, sobald der
+  Download registriert war (`onCreated`) - `onDeterminingFilename`
+  feuert aber typischerweise ERST danach (Chrome muss dafür u.a.
+  Content-Disposition-Header auswerten). Der Listener war also schon
+  weg, bevor er je die Chance hatte, Ordner/Dateinamen vorzuschlagen -
+  die Datei landete deshalb unbenannt im normalen Downloads-Ordner
+  statt im gewünschten Unterordner. Jetzt wird explizit auf das
+  tatsächliche Feuern von `onDeterminingFilename` gewartet (mit
+  8-Sekunden-Timeout als Sicherheitsnetz), bevor der Tab geschlossen und
+  das Ergebnis zurückgegeben wird.
+
+## Neu in Version 0.13.0
+
+- **Landesarchiv Baden-Württemberg: Formular-basierter Bilddownload.**
+  Diese Seiten bieten keinen direkten Bild-Link, sondern lösen den
+  Download über ein per JavaScript abgeschicktes Formular aus
+  (`document.pdfForm.action='download.php';document.pdfForm.submit();`).
+  Beim „Bildvorschau prüfen“ passiert hier bewusst noch nichts (kein
+  Tab, kein Fetch) - erst beim expliziten Klick auf „gemeinsam
+  herunterladen“ öffnet die Extension kurz einen Tab, schickt das
+  Formular ab und leitet den ausgelösten Download automatisch in den
+  benannten Zielordner um (`chrome.downloads.onDeterminingFilename`).
+  Keine Bildvorschau möglich (es gibt keine direkt referenzierbare
+  Bild-URL vorab) - im Panel erscheint stattdessen der Status „Bereit
+  für Formular-Download“. Neue `host_permissions`: `landesarchiv-bw.de`
+  (auch `http://`, da der Beispiel-Link kein `https` nutzt).
+- **wbc.poznan.pl (dLibra, Polen): bewusst NICHT automatisiert.** Die
+  geprüfte Beispielpublikation ist explizit captcha-/zugangsgeschützt
+  ("Secured publication", reCAPTCHA-Hinweis). Das wird nicht umgangen -
+  die generierte Quellenangabe benennt das jetzt auch explizit, statt
+  nur "noch nicht unterstützt" zu sagen.
+- „picture“ als weiteres Wort für die Seitenzahl-Erkennung aus der
+  Quellenbeschreibung ergänzt (Beispiel: „picture 74“ bei Landesarchiv
+  BW).
+
 ## Neu in Version 0.12.0
 
 - **Generische Quellenerkennung statt Domain-Liste.** Bisher musste jede

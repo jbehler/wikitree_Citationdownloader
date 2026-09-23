@@ -846,3 +846,123 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+// ---------------------------------------------------------------------
+// Landesarchiv Baden-Württemberg (plink): Formular-Submit statt Link
+// -----------------------------------------------------------------------
+// Diese Seiten bieten keinen direkten Bild-Link, sondern lösen den
+// Download über ein per JavaScript abgeschicktes Formular aus
+// (bestätigtes Beispiel: <a href="javascript:document.pdfForm.action=
+// 'download.php';document.pdfForm.submit();">Bilddatei herunterladen</a>).
+// Es gibt hier keinen "Vorschau"-Schritt ohne Nebenwirkung - entweder man
+// öffnet einen Tab und lässt das Formular NICHT abschicken (dann weiß man
+// nicht, ob der Download klappen wird), oder man schickt es ab und löst
+// damit den echten Download aus. Deshalb wird hier bewusst NICHT beim
+// "Bildvorschau prüfen" etwas getan (siehe content.js) - der eigentliche
+// Formular-Submit passiert erst beim expliziten "gemeinsam
+// herunterladen"-Klick, wie bei jedem anderen Download auch.
+// ---------------------------------------------------------------------
+
+async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
+  let tab = null;
+
+  try {
+    tab = await chrome.tabs.create({ url: plinkUrl, active: false });
+    await waitForTabComplete(tab.id);
+
+    const downloadPromise = new Promise((resolve) => {
+      const createdListener = (item) => {
+        chrome.downloads.onCreated.removeListener(createdListener);
+        resolve(item);
+      };
+      chrome.downloads.onCreated.addListener(createdListener);
+      setTimeout(() => {
+        chrome.downloads.onCreated.removeListener(createdListener);
+        resolve(null);
+      }, 10000);
+    });
+
+    // WICHTIG (Bugfix): onDeterminingFilename feuert typischerweise ERST
+    // NACH onCreated (Chrome muss dafür ggf. erst Header wie
+    // Content-Disposition auswerten). Der Listener darf deshalb nicht
+    // schon entfernt werden, sobald downloadPromise (onCreated) aufgelöst
+    // ist - das hätte den eigenen Vorschlag nie wirksam werden lassen und
+    // erklärt frühere Fehlschläge (Datei landete unbenannt im
+    // Standard-Downloads-Ordner). Stattdessen wird separat auf das
+    // tatsächliche Feuern von onDeterminingFilename gewartet (mit
+    // Timeout als Sicherheitsnetz, damit der Listener nicht unbegrenzt
+    // hängen bleibt, falls der Download aus irgendeinem Grund keinen
+    // Dateinamen bestimmt).
+    let listenerActive = true;
+    const filenameDeterminedPromise = new Promise((resolve) => {
+      function onDeterminingFilename(item, suggest) {
+        chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
+        listenerActive = false;
+        const extMatch = /\.[a-z0-9]{2,5}$/i.exec(item.filename || "");
+        const ext = extMatch ? extMatch[0] : "";
+        const safeFolder = sanitizeForFilesystem(folder);
+        const safeBase = sanitizeForFilesystem(suggestedNameBase);
+        suggest({ filename: `${safeFolder}/${safeBase}${ext}` });
+        resolve(true);
+      }
+      chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
+      setTimeout(() => {
+        if (listenerActive) {
+          chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
+          listenerActive = false;
+        }
+        resolve(false);
+      }, 8000);
+    });
+
+    const execResult = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const forms = Array.from(document.forms);
+        const target = forms.find((f) => f.name === "pdfForm") || forms.find((f) => /download\.php/i.test(f.action || ""));
+        if (!target) return { submitted: false };
+        try {
+          target.action = "download.php";
+        } catch (e) {
+          /* falls schreibgeschützt: ursprüngliche action beibehalten und trotzdem absenden */
+        }
+        target.submit();
+        return { submitted: true };
+      }
+    });
+
+    const submitted = !!(execResult && execResult[0] && execResult[0].result && execResult[0].result.submitted);
+    if (!submitted) {
+      return { ok: false, reason: "Formular \"pdfForm\" (bzw. ein Formular mit download.php-Ziel) wurde auf der Seite nicht gefunden." };
+    }
+
+    const item = await downloadPromise;
+    if (!item) {
+      return { ok: false, reason: "Formular wurde abgeschickt, aber innerhalb von 10 Sekunden wurde kein Download registriert." };
+    }
+
+    const filenameApplied = await filenameDeterminedPromise;
+    if (!filenameApplied) {
+      return { ok: true, downloadId: item.id, reason: "Download gestartet, aber der Ordner-/Namensvorschlag griff nicht rechtzeitig - Datei liegt vermutlich im Standard-Downloads-Ordner mit Standard-Namen." };
+    }
+    return { ok: true, downloadId: item.id };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  } finally {
+    if (tab && tab.id) {
+      try {
+        await chrome.tabs.remove(tab.id);
+      } catch (e2) {
+        /* Tab evtl. schon geschlossen */
+      }
+    }
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "SUBMIT_FORM_AND_DOWNLOAD") {
+    const { url, folder, suggestedNameBase } = msg.payload || {};
+    submitFormAndDownload(url, folder, suggestedNameBase).then(sendResponse);
+    return true;
+  }
+});

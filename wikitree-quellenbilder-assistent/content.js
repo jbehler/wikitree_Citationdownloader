@@ -38,7 +38,20 @@
         "nennen (falls bekannt), und bei Online-Nutzung zusätzlich den beständigen Verweis (Permalink) zur Fundstelle " +
         "in den Findmitteln angeben. Gilt für Digitalisate aus dem Online-Findmittelsystem; bei separat bestellten " +
         "Digitalisaten ggf. abweichende Bedingungen erfragen."
-    }
+    },
+    "www.wbc.poznan.pl": { name: "Wielkopolska Digital Library (Poznań)" },
+    "wbc.poznan.pl": { name: "Wielkopolska Digital Library (Poznań)" }
+  };
+
+  // Quellen, bei denen bewusst KEIN automatischer Bildabruf versucht wird,
+  // weil eine explizite Zugangssperre (CAPTCHA, Login, "secured publication")
+  // vorliegt - anders als bei einfach nur "noch nicht unterstützt", ist das
+  // hier eine bewusste Entscheidung, keine technische Absicherung zu
+  // umgehen. Geprüft am Beispiel: wbc.poznan.pl zeigt bei manchen
+  // Publikationen "Secured publication" / reCAPTCHA-Hinweise.
+  const PROTECTED_NO_AUTOMATION = {
+    "www.wbc.poznan.pl": "Diese Publikation ist bei wbc.poznan.pl teils durch reCAPTCHA/Zugangsprüfung geschützt (\"Secured publication\"). Das wird bewusst nicht automatisiert umgangen - bitte manuell im Browser öffnen und herunterladen.",
+    "wbc.poznan.pl": "Diese Publikation ist bei wbc.poznan.pl teils durch reCAPTCHA/Zugangsprüfung geschützt (\"Secured publication\"). Das wird bewusst nicht automatisiert umgangen - bitte manuell im Browser öffnen und herunterladen."
   };
 
   function getMetsHostFromDfgUrl(url) {
@@ -88,6 +101,9 @@
         citationLicenseNote: known ? known.citationLicenseNote : null
       };
     }
+    if (source.domain === "landesarchiv-bw-plink") {
+      return { name: "Landesarchiv Baden-Württemberg", citationLicenseNote: null };
+    }
     if (source.domain === "sonstige-quelle") {
       let host = null;
       try {
@@ -98,7 +114,8 @@
       const known = host && KNOWN_INSTITUTIONS[host];
       return {
         name: (known && known.name) || humanizeHost(host) || "unbekannte Quelle",
-        citationLicenseNote: known ? known.citationLicenseNote : null
+        citationLicenseNote: known ? known.citationLicenseNote : null,
+        protectedReason: host ? PROTECTED_NO_AUTOMATION[host] : null
       };
     }
     return null;
@@ -109,6 +126,7 @@
     if (/matricula-online\.eu/i.test(href)) return "matricula";
     if (/landesarchiv-nrw\.de/i.test(href)) return "landesarchiv-nrw-direkt";
     if (/arcinsys\./i.test(href)) return "arcinsys-direkt";
+    if (/landesarchiv-bw\.de/i.test(href)) return "landesarchiv-bw-plink";
     return "sonstige-quelle";
   }
 
@@ -123,7 +141,7 @@
     // die tatsächliche Seiten-/Blattangabe.
     const container = anchor.closest("li, p, div") || anchor.parentElement;
     const text = container ? container.textContent : "";
-    const m = /\b(?:S\.?|Seite|Blatt|Bl\.?|page|pages|p\.?|pag\.?|fol\.?)\s*(\d+)\b/i.exec(text || "");
+    const m = /\b(?:S\.?|Seite|Blatt|Bl\.?|page|pages|picture|p\.?|pag\.?|fol\.?)\s*(\d+)\b/i.exec(text || "");
     return m ? m[1] : null;
   }
 
@@ -193,12 +211,21 @@
         `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Link verweist auf das Gesamtdokument, ` +
         `bitte im Dokument selbst zur passenden Seite navigieren. Lizenz-/Nutzungsbedingungen nicht bekannt ` +
         `(nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei ${info.name} nachsehen.`;
+    } else if (source.domain === "landesarchiv-bw-plink") {
+      const info = institutionInfoForSource(source);
+      const pageHint = source.citedPageHint ? ` (Seite ${source.citedPageHint})` : "";
+      citation =
+        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Bilddownload über ein Formular auf der Seite. ` +
+        `Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
+        `direkt bei ${info.name} nachsehen.`;
     } else if (source.domain === "sonstige-quelle") {
       const info = institutionInfoForSource(source);
       const pageHint = source.citedPageHint ? ` (vermutlich Seite ${source.citedPageHint})` : "";
+      const reason = info.protectedReason
+        ? info.protectedReason
+        : "Automatischer Bildabruf für diese Quelle ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen.";
       citation =
-        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Automatischer Bildabruf für diese Quelle ` +
-        `ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen. Lizenz-/` +
+        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${reason} Lizenz-/` +
         `Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
         `direkt bei ${info.name} nachsehen.`;
     } else {
@@ -295,16 +322,27 @@
       if (quick && quick.ok) return quick;
       return chrome.runtime.sendMessage({ type: "FIND_IMAGE_VIA_HIDDEN_TAB", url: source.url });
     }
+    if (source.domain === "landesarchiv-bw-plink") {
+      // Kein Fetch/Tab beim Prüfen: Der Bilddownload läuft hier über ein
+      // Formular-Submit, das selbst schon der eigentliche Download-Trigger
+      // ist. Um während der reinen Vorschau keine unerwünschte Nebenwirkung
+      // (Download) auszulösen, wird hier nur signalisiert, dass diese
+      // Quelle beim "gemeinsam herunterladen"-Klick per Formular-Submit
+      // verarbeitet werden kann - der eigentliche Submit passiert erst dort.
+      const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
+      return { ok: true, via: "form-download-pending", label: "Landesarchiv Baden-Württemberg", pageNumber };
+    }
     if (source.domain === "sonstige-quelle") {
       // Unbekanntes System (z.B. dLibra, ein anderes Landesarchiv-System
       // usw.) - kein Fetch-Versuch, da weder host_permissions noch eine
       // passende Extraktionslogik dafür existieren. Lieber ehrlich sofort
       // sagen, dass das (noch) nicht unterstützt wird, statt einen
       // sicher fehlschlagenden Netzwerk-Versuch zu starten.
+      const info = institutionInfoForSource(source);
       const pageHint = source.citedPageHint ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.` : "";
       return {
         ok: false,
-        reason: `Dieses System wird von der Extension noch nicht unterstützt - bitte manuell öffnen und herunterladen.${pageHint}`
+        reason: info.protectedReason || `Dieses System wird von der Extension noch nicht unterstützt - bitte manuell öffnen und herunterladen.${pageHint}`
       };
     }
     return { ok: false, reason: "Keine passende Abruf-Methode für diese Quelle bekannt." };
@@ -423,6 +461,9 @@
       const info = institutionInfoForSource(source);
       return `${info.name} (Gesamtdokument)`;
     }
+    if (source.domain === "landesarchiv-bw-plink") {
+      return institutionInfoForSource(source).name;
+    }
     if (source.domain === "sonstige-quelle") {
       const info = institutionInfoForSource(source);
       return info.name;
@@ -532,7 +573,9 @@
       const previewEl = panel.querySelector(`#qba-preview-${i}`);
       previewEl.innerHTML = ""; // wichtig: verhindert doppelte Bilder bei erneutem Prüfen
       const info = sources[i].imageInfo;
-      if (info && info.ok) {
+      if (info && info.ok && info.via === "form-download-pending") {
+        statusEl.textContent = "Bereit für Formular-Download (wird beim gemeinsamen Herunterladen ausgelöst)";
+      } else if (info && info.ok) {
         const viaLabel =
           info.via === "mets"
             ? "über METS-Datei"
@@ -639,8 +682,9 @@
       const checks = Array.from(panel.querySelectorAll(".qba-check"));
       const chosen = checks.filter((c) => c.checked).map((c) => sources[parseInt(c.dataset.idx, 10)]);
       const withImages = chosen.filter((s) => s.imageInfo && s.imageInfo.ok && s.imageInfo.imageUrl);
+      const formDownloads = chosen.filter((s) => s.imageInfo && s.imageInfo.ok && s.imageInfo.via === "form-download-pending");
 
-      if (withImages.length === 0) {
+      if (withImages.length === 0 && formDownloads.length === 0) {
         alert("Für keine der ausgewählten Quellen wurde ein Bild gefunden - nichts zum Herunterladen.");
         return;
       }
@@ -663,10 +707,30 @@
           payload: { folderName, files, citationsText }
         });
         const failed = (result.results || []).filter((r) => !r.ok);
-        if (failed.length > 0) {
-          alert(`Ordner "${result.folder}": ${result.results.length - failed.length} von ${result.results.length} Dateien heruntergeladen. Fehler: ${failed.map((f) => f.reason).join("; ")}`);
+
+        // Formular-basierte Downloads (Landesarchiv BW) separat behandeln:
+        // jeder öffnet kurz einen eigenen Tab und schickt das Formular ab.
+        const formResults = [];
+        for (let i = 0; i < formDownloads.length; i++) {
+          const s = formDownloads[i];
+          const num = String(withImages.length + i + 1).padStart(2, "0");
+          const nameBase = `${num}-${buildFileLabel(s, s.imageInfo)}`;
+          btn.textContent = `Formular-Download ${i + 1}/${formDownloads.length} …`;
+          const r = await chrome.runtime.sendMessage({
+            type: "SUBMIT_FORM_AND_DOWNLOAD",
+            payload: { url: s.url, folder: folderName, suggestedNameBase: nameBase }
+          });
+          formResults.push(r);
+        }
+        const formFailed = formResults.filter((r) => !r.ok);
+
+        const totalOk = result.results.length - failed.length + (formResults.length - formFailed.length);
+        const totalCount = result.results.length + formResults.length;
+        if (failed.length > 0 || formFailed.length > 0) {
+          const reasons = [...failed.map((f) => f.reason), ...formFailed.map((f) => f.reason)].join("; ");
+          alert(`Ordner "${result.folder}": ${totalOk} von ${totalCount} Dateien heruntergeladen. Fehler: ${reasons}`);
         } else {
-          alert(`Fertig: ${files.length} Bild(er) + Quellenangaben in den Download-Unterordner "${result.folder}" gespeichert.`);
+          alert(`Fertig: ${totalCount} Datei(en) + Quellenangaben in den Download-Unterordner "${result.folder}" gespeichert.`);
         }
       } catch (e) {
         alert(`Download fehlgeschlagen: ${String(e)}`);
