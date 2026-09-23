@@ -88,13 +88,19 @@ function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
     .finally(() => clearTimeout(timer));
 }
 
-// Liest ein Attribut aus einem Attribut-String, tolerant gegenüber
-// doppelten UND einfachen Anführungszeichen.
+// Liest ein Attribut aus einem Attribut-String, tolerant gegenüber doppelten
+// UND einfachen Anführungszeichen sowie unquoted Werten (Landesarchiv-BW-
+// Seiten nutzen teils Legacy-HTML wie width=13 ohne Anführungszeichen - ohne
+// diese Toleranz gingen dort z.B. name/value der Betrachter-Formularfelder
+// und der originalBilddatei-Optionen verloren und der POST-Renderversuch
+// würde nie anlaufen).
 function getAttr(attrString, name) {
-  const re = new RegExp(name + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')", "i");
+  const re = new RegExp(name + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s\"'>]+))", "i");
   const m = re.exec(attrString || "");
   if (!m) return null;
-  return m[1] !== undefined ? m[1] : m[2];
+  if (m[1] !== undefined) return m[1];
+  if (m[2] !== undefined) return m[2];
+  return m[3] || "";
 }
 
 // Findet alle Öffnungs-Tags eines Elementnamens (Namespace-Präfix egal),
@@ -551,11 +557,45 @@ function isLandesarchivBwUrl(url) {
   }
 }
 
+// Dekodiert das '&'-Zeichen in gerenderten Bild-URLs: Die zoom.php-Seiten
+// können die Viewer-Konfiguration serverseitig als HTML-Entities (&amp; /
+// &#38; / &#x26;) oder JS-kodiert (\u0026) enthalten. Ohne Dekodierung würde
+// '&amp;zoom=...' als Parameter-NAME übergeben werden und der Server liefert
+// Fehler statt des Scans.
+function decodeUrlAmpersands(u) {
+  return (u || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#38;/gi, "&")
+    .replace(/&#x26;/gi, "&")
+    .replace(/\\u0026/gi, "&");
+}
+
+// Landesarchiv-BW-Bild-URLs bewusst auf https anheben (Site sendet HSTS,
+// https ist erreichbar): WikiTree läuft https, http-Bild-URLs wären sonst
+// Mixed Content und würden vom Browser blockiert (gleicher Gedanke wie
+// upgradeMatriculaImageUrlToHttps oben).
+function upgradeLandesarchivBwImageUrlToHttps(url) {
+  if (/^http:\/\/(?:[a-z0-9-]+\.)*landesarchiv-bw\.de\//i.test(url)) {
+    return url.replace(/^http:/i, "https:");
+  }
+  return url;
+}
+
+// Extrahiert aus dem HTML einer bild_zoom-Seite (GET- oder POST-Rendervariante)
+// die serverseitig gerenderte bild.php-URL des Scans inkl. Label/Seitenzahl.
 function extractLandesarchivBwBildSource(html, pageUrl) {
-  const sourceMatch = /imageSource:\s*(['"])(bild\.php\?[^'"]+)\1/i.exec(html);
+  // Toleranter gelesen als bisher: die gerenderte URL kann einen Pfad-
+  // Präfix haben (z.B. '/ofs21/bild_zoom/bild.php?...' nach Server-Update)
+  // statt direkt mit 'bild.php?' zu beginnen.
+  const sourceMatch = /imageSource:\s*(['"])([^'"]*bild\.php\?[^'"]+)\1/i.exec(html);
   if (!sourceMatch) return null;
 
-  const imageUrl = absoluteUrl(sourceMatch[2], pageUrl);
+  // '&'-Kodierung dekodieren (sonst übernimmt '&amp;zoom=...' als
+  // Parameter-NAME im Abruf) und bewusst auf https anheben: WikiTree läuft
+  // https, http-Bild-URLs wären Mixed Content und würden blockiert.
+  const imageUrl = upgradeLandesarchivBwImageUrlToHttps(
+    absoluteUrl(decodeUrlAmpersands(sourceMatch[2]), pageUrl)
+  );
   if (!imageUrl) return null;
 
   // Volle JPEG-Qualität für den Download (siehe Kommentar oben). Fehlt der
@@ -582,14 +622,19 @@ function extractLandesarchivBwBildSource(html, pageUrl) {
   }
 
   // Alle Optionen einsammeln, um daraus Label und Seitenzahl zu holen.
+  // Über getAttr statt hartes value="..."-Muster: unquoted Optionen der
+  // Legacy-HTML-Variante wären sonst verloren (gleiche Toleranz wie bei
+  // den Betrachter-Formularfeldern unten).
   const options = [];
-  const optionRe = /<option\s+value="([^"]+\.jpg)"([^>]*)>([^<]*)<\/option>/gi;
+  const optionRe = /<option\b([^>]*)>([^<]*)<\/option>/gi;
   let optionMatch;
   while ((optionMatch = optionRe.exec(html)) !== null) {
+    const file = getAttr(optionMatch[1], "value") || "";
+    if (!/\.jpg(?:$|\?)/i.test(file)) continue;
     options.push({
-      file: optionMatch[1],
-      label: optionMatch[3].trim(),
-      selected: /\bselected\b/i.test(optionMatch[2])
+      file,
+      label: optionMatch[2].trim(),
+      selected: /\bselected\b/i.test(optionMatch[1])
     });
   }
 
@@ -619,6 +664,126 @@ function extractLandesarchivBwBildSource(html, pageUrl) {
 }
 
 
+// ---------------------------------------------------------------------
+// Weg 2a-BW, Zweitversuch (Legacy-Rendervariante des Bildbetrachters):
+// Der GET-Abruf einer zoom.php-Seite rendert seit dem Server-Update oft
+// den JS-getriebenen Legacy-Viewer: Die Bilddatei steht NICHT als
+// statische imageSource im HTML, sondern wird erst per Inline-JS aus den
+// Formularfeldern gebaut (bild2.php + <img id="ausschnittbild">).
+// Der Betrachter blaettert Seiten durch, indem er sein
+// <form name="formular" action="zoom.php" method="POST"> mit den Feldern
+// abschickt - und GENAU dieses POST rendert die Variante, in der die
+// bild.php-URL (imageSource) serverseitig im HTML steht.
+// Live am Beispiel-Link verifiziert: Das POST braucht weder Session noch
+// Cookies (credentials:"omit" genuegt), die Antwort wird nur fuer die
+// Extraktion ausgewertet und aendert nichts dauerhaft am Server.
+// ---------------------------------------------------------------------
+
+// Versteckte Felder + Selects des Legacy-Formulars einsammeln. Tolerant
+// gegen unquoted Attribute, weil die BW-Seiten teils Legacy-HTML nutzen
+// (z.B. width=13 ohne Anfuehrungszeichen).
+function extractLandesarchivBwLegacyFormFields(html) {
+  const fields = {};
+  let m;
+  const inputRe = /<input\b[^>]*>/gi;
+  while ((m = inputRe.exec(html)) !== null) {
+    if (!/type\s*=\s*["']?hidden["']?/i.test(m[0])) continue;
+    const name = getAttr(m[0], "name");
+    if (!name) continue;
+    fields[name] = getAttr(m[0], "value") || "";
+  }
+  const selectRe = /<select\b[^>]*>([\s\S]*?)<\/select>/gi;
+  while ((m = selectRe.exec(html)) !== null) {
+    const name = getAttr(m[0], "name");
+    if (!name) continue;
+    const opts = [...m[1].matchAll(/<option\b[^>]*>/gi)];
+    const chosen = opts.find((o) => /\bselected\b/i.test(o[0])) || opts[0];
+    if (chosen) fields[name] = getAttr(chosen[0], "value") || "";
+  }
+  return fields;
+}
+
+// JPG-Dateinamen aus den originalBilddatei-Optionen (die Betrachter-Seite
+// listet alle Seiten des Dokuments als <option value="04_...jpg">Bild N</option>).
+function extractLandesarchivBwJpgOptions(html) {
+  const values = [];
+  const optRe = /<option\b[^>]*>/gi;
+  let m;
+  while ((m = optRe.exec(html)) !== null) {
+    const value = getAttr(m[0], "value") || "";
+    if (/\.jpg(?:$|\?)/i.test(value)) values.push(value);
+  }
+  return values;
+}
+
+// Welcher Scan wird aktuell angezeigt? Der GET-Render markiert die Option
+// NICHT als selected - verlaesslich ist die URL (gewaehlteSeite=N, wie die
+// Betrachter-JS selbst hardcodiert: bilddatei=N). Reihenfolge:
+// gewaehlteSeite-URL-Param -> bilddatei=N aus dem Inline-JS -> erste Option.
+function extractLandesarchivBwCurrentFile(html, pageUrl) {
+  const jpgOptions = extractLandesarchivBwJpgOptions(html);
+  if (jpgOptions.length === 0) return null;
+  let idx = -1;
+  const pageParam = pageUrl ? /[?&]gewaehlteSeite=(\d+)/i.exec(pageUrl) : null;
+  const jsBilddatei = /bilddatei=(\d+)/i.exec(html);
+  if (pageParam) idx = parseInt(pageParam[1], 10) - 1;
+  else if (jsBilddatei) idx = parseInt(jsBilddatei[1], 10) - 1;
+  if (idx >= 0 && idx < jpgOptions.length) return jpgOptions[idx];
+  return jpgOptions[0];
+}
+
+// POST-Renderversuch: repliziert den Formular-Submit des Legacy-Betrachters
+// und liefert (falls erfolgreich) das HTML der Variante mit imageSource.
+// Scheitert der Versuch still, bleibt der Formular-Download als Rueckfallweg.
+async function reRenderLandesarchivBwZoomViaPost(html, pageUrl) {
+  try {
+    const fields = extractLandesarchivBwLegacyFormFields(html);
+    const current = extractLandesarchivBwCurrentFile(html, pageUrl);
+    if (!current) return null;
+    fields.originalBilddatei = current;
+
+    const formMatch = /<form\b[^>]*name\s*=\s*["']?formular["']?[^>]*>/i.exec(html);
+    const action = formMatch ? getAttr(formMatch[0], "action") : null;
+    const postUrl = absoluteUrl(action || "zoom.php", pageUrl);
+    if (!postUrl || !/^https?:/i.test(postUrl)) return null;
+
+    const res = await fetchWithTimeout(postUrl, {
+      method: "POST",
+      credentials: "omit",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(fields).toString(),
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch (e) {
+    // Bewusst still: Der POST ist nur ein Renderversuch. Scheitert er
+    // (z.B. geaenderter Server-State), greift der Formular-Download.
+    return null;
+  }
+}
+
+// plink-Format ?f=<archiv>-<bestand>-<bild> (live verifiziert): Der
+// plink-Server leitet auf bild_zoom/plink_screen.php weiter; diese
+// Seite ist ein JS-Weiterleitungs-Stub (self.location.href = "zoom.php?...")
+// zum eigentlichen zoom.php-Betrachter. Die Extension repliziert das,
+// indem sie aus der plink_screen-Antwort-URL den zoom.php-Abruf baut
+// (gleiche Query-Parameter, plink_screen.php -> zoom.php;
+// screenbreite/screenhoehe sind optional - zoom.php antwortet auch
+// ohne sie mit der statischen bild.php-Quelle, live geprueft).
+function resolveLandesarchivBwPlinkScreenRedirect(html, finalUrl) {
+  try {
+    if (!finalUrl || finalUrl.indexOf("/plink_screen.php") < 0) return null;
+    // Zusaetzlich pruefen, dass die Seite wirklich der JS-Stub ist
+    // (self.location.href mit zoom.php-Ziel) - sonst handelt es
+    // sich um einen anderen Seitentyp unter plink_screen.php.
+    const stubIdx = html.indexOf("self.location.href");
+    if (stubIdx < 0 || html.indexOf("zoom.php?", stubIdx) < 0) return null;
+    return finalUrl.replace("/plink_screen.php", "/zoom.php");
+  } catch (e) {
+    return null;
+  }
+}
+
 async function fetchAndFindImageGeneric(url) {
   try {
     const res = await fetchWithTimeout(url, { credentials: "omit" });
@@ -632,11 +797,64 @@ async function fetchAndFindImageGeneric(url) {
     // des aktuellen Scans ins HTML - gleicher Gedanke wie Matriculas dv1.
     // WICHTIG: BW-Seiten dürfen NICHT in die generische <img>-Heuristik
     // fallen (Weg 2b) - sie enthalten viele UI-Grafiken (Logos, Buttons),
-    // die dort als falsches "Bild" enden würden. Fehlt die imageSource
-    // (z.B. andere BW-Seitentypen), brechen wir bewusst hier ab; content.js
-    // fällt dann auf den bekannten Formular-Download-Pfad zurück.
+    // die dort als falsches "Bild" enden würden. Rendert der GET-Abruf nur
+    // die Legacy-Variante (Bilddatei wird erst per Inline-JS gebaut, keine
+    // statische imageSource im HTML - live am Beispiel-Link verifiziert),
+    // gibt es den Zweitversuch: der Formular-Submit des Betrachters selbst
+    // (POST der Felder mit originalBilddatei) rendert die Variante mit
+    // serverseitiger bild.php-Quelle, ohne Cookies und ohne Session.
+    // Fehlt danach immer noch die imageSource (z.B. andere BW-Seitentypen),
+    // brechen wir bewusst ab; content.js fällt dann auf den bekannten
+    // Formular-Download-Pfad zurück.
     if (isLandesarchivBwUrl(url)) {
-      const bw = extractLandesarchivBwBildSource(html, url);
+      // Basis für relative bild.php-URLs ist die FINALE Antwort-URL
+      // (res.url): gerenderte/plink-Links können serverseitig weiterleiten
+      // (z.B. www -> www2, plink -> bild_zoom/zoom.php). Gegen die
+      // ORIGINAL-Anfrage aufgelöst würde 'bild.php' in den falschen Pfad
+      // landen (z.B. /bild.php statt /ofs21/bild_zoom/bild.php).
+      const finalUrl = res.url || url;
+      // Zuerst ohne Cookies: Liefert der GET den JS-getriebenen Legacy-
+      // Betrachter (keine statische imageSource im HTML), repliziert der
+      // Formular-POST des Betrachters die serverseitige Renderung der
+      // Variante mit bild.php-Quelle (live verifiziert).
+      let bw = extractLandesarchivBwBildSource(html, finalUrl);
+      if (!bw) {
+        // plink-Format ?f=<archiv>-<bestand>-<bild> (live verifiziert):
+        // plink leitet auf einen plink_screen-JS-Stub weiter - den
+        // zoom.php-Abruf daraus bauen und dort normal extrahieren
+        // (inkl. POST-Renderversuch fuer die Legacy-Variante).
+        const plinkZoomUrl = resolveLandesarchivBwPlinkScreenRedirect(html, finalUrl);
+        if (plinkZoomUrl) {
+          const plinkRes = await fetchWithTimeout(plinkZoomUrl, { credentials: "include" });
+          if (plinkRes.ok) {
+            const plinkHtml = await plinkRes.text();
+            const plinkFinal = plinkRes.url || plinkZoomUrl;
+            bw = extractLandesarchivBwBildSource(plinkHtml, plinkFinal);
+            if (!bw) {
+              const plinkPostHtml = await reRenderLandesarchivBwZoomViaPost(plinkHtml, plinkFinal);
+              if (plinkPostHtml) bw = extractLandesarchivBwBildSource(plinkPostHtml, plinkFinal);
+            }
+          }
+        }
+      }
+      if (!bw) {
+        const postHtml = await reRenderLandesarchivBwZoomViaPost(html, finalUrl);
+        if (postHtml) bw = extractLandesarchivBwBildSource(postHtml, finalUrl);
+      }
+      // Letzter Versuch MIT Cookies (credentials "include"): Der browser-
+      // seitige Session-/Consent-Cookie (z.B. bestätigter Datenschutzhinweis
+      // oder vom Betrachter-JS registrierte Session) kann dafür sorgen,
+      // dass der Server die moderne Variante mit statischer imageSource
+      // direkt rendert - in diesem Fall genügt der erneute GET ohne
+      // POST-Renderversuch.
+      let retryBody = null;
+      if (!bw) {
+        const retryRes = await fetchWithTimeout(url, { credentials: "include" });
+        if (retryRes.ok) {
+          retryBody = await retryRes.text();
+          bw = extractLandesarchivBwBildSource(retryBody, retryRes.url || finalUrl);
+        }
+      }
       if (bw) {
         return {
           ok: true,
@@ -649,10 +867,24 @@ async function fetchAndFindImageGeneric(url) {
           rightsCategory: bw.rightsCategory
         };
       }
+      // Server antwortet mit HTTP 200 aber LEEREM Inhalt: Live-Probe bestätigt:
+      // das plink-Format ?i=<id> wird nicht mehr aufgelöst (der Server antwortet
+      // fuer JEDEN, auch mit Browser-UA und allen Browser-Headern, mit einer
+      // leeren Seite - www2/ofs21-Varianten antworten 404). Das Format
+      // ?f=<archiv>-<bestand>-<bild> funktioniert noch und wird oben über den
+      // plink_screen-Stub aufgelöst. Kein Abrufverfahren kann einen toten
+      // ?i-Link auflösen; content.js zeigt deshalb ehrlich den Grund.
+      if (html.trim() === "" && (retryBody === null || retryBody.trim() === "")) {
+        return {
+          ok: false,
+          reason:
+            "Link antwortet leer (HTTP 200 ohne Inhalt): das plink-Format mit ?i=<id> wird von Landesarchiv BW nicht mehr aufgelöst (der Server antwortet für JEDEN mit einer leeren Seite, auch im Browser) - das plink-Format ?f=<archiv>-<bestand>-<bild> funktioniert noch. Bitte den Quellen-Link auf eine aktuelle Landesarchiv-BW-Digitalisat-Seite (z.B. www2.landesarchiv-bw.de/ofs21/bild_zoom/zoom.php?...) aktualisieren; mit einem aktuellen Link liefert 0.16.1 die Bildvorschau."
+        };
+      }
       return {
         ok: false,
         reason:
-          "Landesarchiv-BW-Seite enthält keine bild.php-Bildquelle (vermutlich ein Seitentyp ohne Vorschau) - es wird der Formular-Download versucht."
+          "Landesarchiv-BW-Seite enthält weder direkt noch über den Formular-POST-Renderversuch eine bild.php-Bildquelle (vermutlich ein Seitentyp ohne Vorschau) - es wird der Formular-Download versucht."
       };
     }
 

@@ -15,6 +15,75 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
 
+## Neu in Version 0.16.1
+
+- **Bugfix: Landesarchiv-BW-Vorschau nach Server-Update (background.js):**
+  Seit dem BW-Server-Update rendert der GET-Abruf der
+  `ofs21/bild_zoom/zoom.php`-Seiten (ohne Cookies, wie die Extension
+  abfragt) oft den JS-getriebenen Legacy-Betrachter: Die Bilddatei wird
+  erst per Inline-JS aus den Formularfeldern gebaut, es steht keine
+  statische `imageSource` mit `bild.php`-Quelle im HTML. Die Extension
+  repliziert jetzt den Formular-Submit des Betrachters selbst (POST der
+  Felder mit `originalBilddatei` – live am Beispiel-Link verifiziert: die
+  Antwort rendert serverseitig die `bild.php`-Quelle) und liest daraus die
+  Bild-URL. Der Versuch läuft still beim „Bildvorschau prüfen“ – es öffnet
+  sich kein Tab/Fenster, nichts wird dauerhaft am Server geändert; es ist
+  derselbe POST, den der Betrachter beim Blättern selbst abschickt.
+  Scheitern alle Versuche, verhält sich der BW-Link wie bisher („bereit
+  für Formular-Download“).
+- **Robustheits-Fixes derselben Stelle (background.js):**
+  - Attribute werden jetzt auch **unquoted** gelesen (`value=…` ohne
+    Anführungszeichen) – die Legacy-Variante nutzt teils Legacy-HTML;
+    vorher gingen dort `name`/`value` der Betrachter-Formularfelder und
+    der `originalBilddatei`-Optionen verloren und der POST-Renderversuch
+    lief nie an.
+  - Relative `bild.php`-URLs werden gegen die **finale Antwort-URL** (nach
+    Server-Weiterleitung, z. B. `www` → `www2` oder `plink` →
+    `bild_zoom/zoom.php`) aufgelöst, nicht gegen den ursprünglich
+    gerenderten Link – sonst landet `bild.php` im falschen Pfad (z. B.
+    `/bild.php` statt `/ofs21/bild_zoom/bild.php`).
+  - Die `imageSource` wird tolerant gegen Pfad-Präfixe gelesen (z. B.
+    `/ofs21/bild_zoom/bild.php?…` statt nur direkt `bild.php?…`), und
+    gerenderte `&amp;`/`&#38;`/`&#x26;`/`\u0026`-Kodierungen werden dekodiert –
+    sonst übernimmt `&amp;zoom=…` als Parameter-NAME und der Server
+    liefert Fehler statt des Scans.
+  - Bild-URLs (Vorschau UND Download) werden wie bei Matricula bewusst
+    auf https hochgestuft – http-Vorschauen wären in der
+    https-WikiTree-Seite als Mixed Content blockiert.
+  - Seitenauswahl-Optionen („Bild N“) werden über denselben toleranten
+    Attribut-Reader gelesen – unquoted Optionen der Legacy-Variante
+    liefern sonst keine Seitenzahl.
+  - Letzter Versuch mit Cookies (`credentials: "include"`): Der
+    browserseitige Session-/Consent-Cookie kann dafür sorgen, dass der
+    Server die moderne Variante mit statischer `imageSource` direkt
+    rendert; dieser erneute GET läuft nur, wenn alle cookie-freien
+    Versuche scheitern.
+- **plink-Format ?f=... auflösen + ehrliche Diagnose für tote ?i-Links (background.js/content.js):**
+  Live-Probe über beide plink-Formate: Das Format
+  `plink/?f=<archiv>-<bestand>-<bild>` lebt noch - es leitet auf
+  `bild_zoom/plink_screen.php?bestand=…&id=…&gewaehlteSeite=…jpg`
+  weiter; diese Seite ist ein JS-Weiterleitungs-Stub
+  (`self.location.href = "zoom.php?…"`) zum eigentlichen zoom.php-
+  Betrachter. Die Extension repliziert jetzt diese Kette: aus der
+  plink_screen-Antwort-URL wird der zoom.php-Abruf gebaut (gleiche
+  Query-Parameter, `plink_screen.php` -> `zoom.php`; screenbreite/
+  screenhoehe sind optional - zoom.php antwortet auch ohne sie mit
+  der statischen bild.php-Quelle, live geprüft) und dort normal
+  extrahiert (inkl. POST-Renderversuch für die Legacy-Variante).
+  Das Format `plink/?i=<id>` ist dagegen tot: der Server antwortet
+  für JEDEN (auch mit Browser-UA und allen Browser-Headern) mit
+  HTTP 200 ohne Inhalt (leere Seite), www2/ofs21-Varianten 404.
+  Die Extension erkennt die leere ?i-Antwort und zeigt beim
+  „Bildvorschau prüfen“ den Grund „Link antwortet leer …“ statt
+  dem falschen „bereit für Formular-Download“-Versprechen; das
+  Zitat nennt den Link als veraltet. Alte Quellen-Links mit
+  ?i=<id> müssen auf eine aktuelle Landesarchiv-BW-Digitalisat-
+  Seite (z. B. www2.landesarchiv-bw.de/ofs21/bild_zoom/zoom.php?…
+  ) aktualisiert werden - mit einem aktuellen Link liefert 0.16.1
+  die Vorschau (unquoted-HTML + POST-Renderversuch).
+- **manifest.json:** Version auf 0.16.1 erhöht; Host-Permissions decken
+  die Bild-Hosts bereits ab, eine Änderung war nicht nötig.
+
 ## Neu in Version 0.16.0
 
 - **Bildvorschau für Landesarchiv Baden-Württemberg (bild_zoom-Links):**

@@ -215,10 +215,13 @@
     } else if (source.domain === "landesarchiv-bw-plink") {
       const info = institutionInfoForSource(source);
       const pageHint = source.citedPageHint ? ` (Seite ${source.citedPageHint})` : "";
-      const direct =
-        imageInfo && imageInfo.ok && imageInfo.via === "bw-bild-php"
-          ? "Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt)."
-          : "Bilddownload über ein Formular auf der Seite.";
+      const deadLink =
+        imageInfo && !imageInfo.ok && /antwortet leer/.test(imageInfo.reason || "");
+      const direct = deadLink
+        ? "Link veraltet: das plink-Format mit ?i=<id> wird von Landesarchiv BW nicht mehr aufgelöst (Link liefert eine leere Seite) - das plink-Format ?f=<archiv>-<bestand>-<bild> funktioniert noch; bitte den Quellen-Link aktualisieren; Bilddownload nicht möglich."
+        : imageInfo && imageInfo.ok && imageInfo.via === "bw-bild-php"
+        ? "Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt)."
+        : "Bilddownload über ein Formular auf der Seite.";
       const rightsNote =
         imageInfo && imageInfo.rightsCategory
           ? ` Auf der Digitalisat-Seite ist die Rechtekategorie ${imageInfo.rightsCategory} gemäß ` +
@@ -344,6 +347,10 @@
       // verarbeitet werden kann.
       const quick = await chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_URL", url: source.url });
       if (quick && quick.ok) return quick;
+      if (quick && !quick.ok && /antwortet leer/.test(quick.reason || "")) {
+        // Ehrlich bleiben: toter ?i-Link (das Format ?i=<id> wird nicht mehr aufgelöst - für JEDEN eine leere Seite; das ?f=<archiv>-<bestand>-<bild>-Format funktioniert noch). Grund als Status zeigen statt dem falschen Formular-Download-Versprechen.
+        return quick;
+      }
       const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
       return { ok: true, via: "form-download-pending", label: "Landesarchiv Baden-Württemberg", pageNumber };
     }
