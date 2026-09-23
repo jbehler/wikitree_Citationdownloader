@@ -215,10 +215,19 @@
     } else if (source.domain === "landesarchiv-bw-plink") {
       const info = institutionInfoForSource(source);
       const pageHint = source.citedPageHint ? ` (Seite ${source.citedPageHint})` : "";
+      const direct =
+        imageInfo && imageInfo.ok && imageInfo.via === "bw-bild-php"
+          ? "Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt)."
+          : "Bilddownload über ein Formular auf der Seite.";
+      const rightsNote =
+        imageInfo && imageInfo.rightsCategory
+          ? ` Auf der Digitalisat-Seite ist die Rechtekategorie ${imageInfo.rightsCategory} gemäß ` +
+            `rightsstatements.org ausgewählt (bei UND: Rechte unbestimmt) - bitte vor einer Veröffentlichung ` +
+            `trotzdem die Nutzungsbedingungen bei ${info.name} prüfen.`
+          : ` Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
+            `direkt bei ${info.name} nachsehen.`;
       citation =
-        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Bilddownload über ein Formular auf der Seite. ` +
-        `Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
-        `direkt bei ${info.name} nachsehen.`;
+        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${direct}${rightsNote}`;
     } else if (source.domain === "sonstige-quelle") {
       const info = institutionInfoForSource(source);
       const pageHint = source.citedPageHint ? ` (vermutlich Seite ${source.citedPageHint})` : "";
@@ -277,6 +286,7 @@
 
   function guessExtension(imageInfo) {
     if (imageInfo && imageInfo.via === "canvas-snapshot") return "png";
+    if (imageInfo && imageInfo.via === "bw-bild-php") return "jpg"; // bild.php-URL endet nicht auf .jpg
     const url = (imageInfo && imageInfo.imageUrl) || "";
     const m = /\.(jpe?g|png|webp|tiff?)(?:[?#]|$)/i.exec(url);
     if (m) return m[1].toLowerCase().replace("jpeg", "jpg");
@@ -324,12 +334,16 @@
       return chrome.runtime.sendMessage({ type: "FIND_IMAGE_VIA_HIDDEN_TAB", url: source.url });
     }
     if (source.domain === "landesarchiv-bw-plink") {
-      // Kein Fetch/Tab beim Prüfen: Der Bilddownload läuft hier über ein
-      // Formular-Submit, das selbst schon der eigentliche Download-Trigger
-      // ist. Um während der reinen Vorschau keine unerwünschte Nebenwirkung
-      // (Download) auszulösen, wird hier nur signalisiert, dass diese
-      // Quelle beim "gemeinsam herunterladen"-Klick per Formular-Submit
-      // verarbeitet werden kann - der eigentliche Submit passiert erst dort.
+      // Zuerst der direkte Weg: bild_zoom-Seiten rendern die URL des
+      // angezeigten JPEGs (bild.php) ins HTML - Vorschau und Download
+      // ohne Nebenwirkung, wie bei Matricula dv1 (seit 0.16.0). Nur wenn
+      // das nichts liefert, bleibt es beim Formular-Download: Dessen
+      // Formular-Submit ist selbst schon der Download-Trigger, deshalb
+      // darf er erst beim "gemeinsam herunterladen"-Klick passieren -
+      // die reinen Prüfung signalisiert nur, dass diese Quelle so
+      // verarbeitet werden kann.
+      const quick = await chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_URL", url: source.url });
+      if (quick && quick.ok) return quick;
       const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
       return { ok: true, via: "form-download-pending", label: "Landesarchiv Baden-Württemberg", pageNumber };
     }
@@ -650,6 +664,8 @@
             ? "über METS-Datei"
             : info.via === "dv1-html"
             ? "direkt aus Matricula-Seite (Original-JPEG)"
+            : info.via === "bw-bild-php"
+            ? "direkt aus Landesarchiv-BW-Seite (bild.php)"
             : info.via === "hidden-tab"
             ? "über Hintergrund-Tab"
             : info.via === "canvas-snapshot"
@@ -677,7 +693,7 @@
           previewEl.appendChild(note);
         }
         const dl = document.createElement("a");
-        dl.href = info.imageUrl;
+        dl.href = info.downloadUrl || info.imageUrl;
         dl.download = `${buildFileLabel(sources[i], info)}.${guessExtension(info)}`;
         dl.target = "_blank";
         dl.rel = "noopener";
@@ -783,7 +799,7 @@
       const files = withImages.map((s, i) => {
         const ext = guessExtension(s.imageInfo);
         const num = String(i + 1).padStart(2, "0");
-        return { url: s.imageInfo.imageUrl, suggestedName: `${num}-${buildFileLabel(s, s.imageInfo)}.${ext}` };
+        return { url: s.imageInfo.downloadUrl || s.imageInfo.imageUrl, suggestedName: `${num}-${buildFileLabel(s, s.imageInfo)}.${ext}` };
       });
       const citationsText = chosen.map((s) => buildCitationText(s, s.imageInfo).citation).join("\n\n");
 

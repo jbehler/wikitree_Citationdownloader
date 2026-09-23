@@ -1,8 +1,9 @@
 # WikiTree Quellenbilder-Assistent
 
 Chrome/Edge-Extension (Manifest V3). Sucht auf einer geöffneten WikiTree-
-Profilseite nach bereits im Text vorhandenen Links zu `matricula-online.eu`
-und zu `dfg-viewer.de` (Landesarchiv NRW), prüft auf eine einbettbare
+Profilseite nach bereits im Text vorhandenen Links zu `matricula-online.eu`,
+zu `dfg-viewer.de` (Landesarchiv NRW) und zu `landesarchiv-bw.de`
+(Landesarchiv Baden-Württemberg), prüft auf eine einbettbare
 Bildvorschau und fügt eine korrekt formatierte Quellenangabe (inkl.
 Lizenztext) in den Bio-Editor ein.
 
@@ -13,6 +14,47 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 `tx_dlf[page]` auf die Seitenzahl. Die Extension liest diese METS-Datei
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
+
+## Neu in Version 0.16.0
+
+- **Bildvorschau für Landesarchiv Baden-Württemberg (bild_zoom-Links):**
+  Die `ofs21/bild_zoom/zoom.php`-Seiten des Landesarchivs BW rendern
+  serverseitig die URL des angezeigten JPEGs in die Konfiguration des
+  Zoom-Viewers ins HTML
+  (`$("#imageViewerContainer…").verySimpleImageViewer({ imageSource:
+  'bild.php?drehen=&zoom=100&…&originalBilddatei=%2Fdata%2Fbildcms%2F…' })`).
+  Die Extension liest diese `imageSource` jetzt direkt aus (rein per HTTP,
+  kein JavaScript nötig, kein Session-Cookie nötig) und zeigt das Scan-
+  Bild in der Vorschau an – der Seitenzähler („Bild N“) wird aus der
+  `selected`-Option der Seitenauswahl ermittelt, der Dokumenttitel
+  (z. B. „456 C Nr. 1792, 2 cm“) aus `<div id="titel">`.
+- **Download in voller Qualitätsstufe:** Für den Download wird dieselbe
+  `bild.php`-URL mit `jpegQualitaetZoombild=100` benutzt (live bestätigt:
+  3496×3098 px, ~4,1 MB statt ~1 MB bei der Viewer-Einstellung 60 und
+  statt ~985 KB beim bisherigen Formular-Download `download.php`, der
+  zusätzlich einen Text-/Typenschild-Balken anhängt).
+- **Rechtekategorie ins Zitat:** Auf den BW-Seiten ist eine
+  Rechtekategorie-Badge verlinkt (z. B. UND = „Rechte unbestimmt“ auf
+  rightsstatements.org). Wenn vorhanden, nimmt das Zitat diese Angabe
+  jetzt mit; sonst bleibt es beim bisherigen Hinweis.
+- **Formular-Download bleibt als Fallback:** BW-Links, die keine
+  `bild.php`-Quelle enthalten (z. B. Strukturansicht), verhalten sich wie
+  bisher („bereit für Formular-Download“, Submit erst beim gemeinsamen
+  Herunterladen). Bewusst wird für BW-Seiten **keine** generische
+  `<img>`-Heuristik mehr durchlaufen – die Seiten enthalten viele
+  UI-Grafiken (Logos, Buttons), die sonst als falsches „Bild“ enden
+  könnten.
+- **manifest.json:** Version auf 0.16.0 erhöht; Host-Permissions
+  (`https://*.landesarchiv-bw.de/*`) decken den Bild-Host bereits ab,
+  eine Änderung war nicht nötig.
+- **Hinweis robots.txt (Landesarchiv BW):** `www2.landesarchiv-bw.de`
+  verbietet in der robots.txt automatisierten Zugriff für alle Crawler
+  außer Googlebot/Yahoo (`Disallow: /`). Die Extension ist kein Crawler:
+  Sie ruft genau die eine Seite ab, deren Link du im Profil anklickst bzw.
+  deren Prüfung du per Klick startest (gleiche Situation wie beim
+  bereits vorhandenen Formular-Download) – kein Blättern, kein Sammeln
+  ganzer Bestände. Das Bild bleibt trotzdem eine manuelle
+  Download-und-Upload-Aufgabe für dich, wie bei allen Quellen.
 
 ## Neu in Version 0.15.0
 
@@ -366,12 +408,17 @@ zu bestimmen.
 4. „Bildvorschau prüfen“ – die Prüfung läuft rein per HTTP im
    Hintergrund (kein sichtbares Fenster): Matricula-Bilder werden aus
    der `dv1`-Variable der Registerseite dekodiert (Original-JPEG,
-   Version 0.15.0), Landesarchiv-Bilder aus der METS-Datei. Nur wenn
-   beides scheitert, kann sich als letzter Fallback kurz sichtbar ein
+   Version 0.15.0), Landesarchiv-NRW-Bilder aus der METS-Datei,
+   Landesarchiv-BW-Bilder aus der `bild.php`-Quelle der
+   Bildbetrachter-Seite (Version 0.16.0). Nur wenn das scheitert, kann
+   sich als letzter Fallback kurz sichtbar ein
    großes, eigenes Fenster öffnen (für einen Canvas-Schnappschuss,
    siehe unten) und danach automatisch wieder schließen; dein
    vorheriges Fenster wird danach automatisch wieder fokussiert. Das
-   kann bis zu ~12 Sekunden dauern.
+   kann bis zu ~12 Sekunden dauern. Landesarchiv-BW-Links ohne direkte
+   Bild-Quelle erscheinen wie bisher als „bereit für
+   Formular-Download“ und werden erst beim gemeinsamen Herunterladen
+   per Formular-Submit verarbeitet.
 5. Checkboxen abwählen, falls einzelne Quellen nicht übernommen werden
    sollen.
 6. „Ausgewählte in Editor einfügen“.
@@ -469,6 +516,27 @@ Beispiel-Seite getestet (siehe unten). Konkret unsicher/experimentell:
   – das ist behoben (Div-Grenzen werden jetzt über Tag-Positionen
   bestimmt statt über einen einzelnen verschachtelten Regex-Treffer).
   **Bestätigt funktionierend** (vom Nutzer getestet).
+- **Bild-URL-Erkennung (Landesarchiv Baden-Württemberg): Bestätigt
+  funktionierend (Version 0.16.0):** Die `bild_zoom/zoom.php`-Seiten
+  rendern serverseitig die URL des angezeigten JPEGs in die
+  JavaScript-Viewer-Konfiguration
+  (`verySimpleImageViewer({ imageSource: 'bild.php?…' })`) - rein per
+  HTTP auslesbar, ohne Session-Cookie. Live gegen die Beispielseite
+  (Bestand 13908, id 3472620, Bild 74, Militärstammliste 456 C Nr. 1792)
+  geprüft: Vorschau-URL HTTP 200, `image/jpeg`, ~1,0 MB (3496×3098 px);
+  Download-URL mit `jpegQualitaetZoombild=100` HTTP 200, `image/jpeg`,
+  ~4,1 MB (identische Auflösung, volle Qualitätsstufe). „Bild N“ kommt
+  aus der mit `selected` markierten Option der Seitenauswahl und
+  entspricht der Nummer, die auch der Archiv-Download im Dateinamen
+  benutzt. Seitenzahl-Angabe im Zitat (aus der Quellenbeschreibung, z. B.
+  „picture 74“) ist davon unabhängig. Für BW-Seiten wird bewusst keine
+  generische `<img>`-Heuristik durchlaufen (zu viele UI-Grafiken);
+  `download.php` über das `pdfForm`-Formular bleibt als Fallback für
+  Links ohne `bild.php`-Quelle. robots.txt des Servers verbietet
+  automatisierten Zugriff für Crawler - die Extension ruft nur die eine,
+  vom Nutzer geöffnete/prüfen-geklickte Seite ab (siehe oben).
+  Ungetestet: BW-Links anderer Seitentypen (z. B. Bildauswahl/
+  thumbnails.php) - dort greift der Formular-Download wie bisher.
 - **Bild-Einbettung in WikiTree:** Siehe eigener Abschnitt oben – WikiTree
   erwartet vermutlich hochgeladene Bilder statt externer `<img src>`.
 
@@ -494,6 +562,12 @@ denen sich gezielt nachbessern lässt, statt weiter zu raten.
   Weitergabe unter gleicher Lizenz). Separat bestellte Digitalisate
   können abweichenden Bedingungen unterliegen – im Zweifel beim
   Landesarchiv NRW nachfragen.
+- **Landesarchiv Baden-Württemberg:** Auf den Digitalisat-Seiten ist
+  eine Rechtekategorie verlinkt (im geprüften Beispiel UND = „Rechte
+  unbestimmt“ auf rightsstatements.org). Die Extension übernimmt diese
+  Angabe ins Zitat, ersetzt aber keine eigene Prüfung: Bitte vor einer
+  Veröffentlichung die Nutzungsbedingungen beim Landesarchiv
+  Baden-Württemberg prüfen.
 - Beide automatisch generierten Zitate enthalten die jeweilige
   Lizenzangabe. Bitte vor Veröffentlichung trotzdem selbst gegenprüfen,
   ob die konkrete Quelle wirklich unter der angenommenen Lizenz steht.

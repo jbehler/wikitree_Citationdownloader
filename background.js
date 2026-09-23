@@ -514,6 +514,110 @@ function upgradeMatriculaImageUrlToHttps(url) {
   return url;
 }
 
+// ---------------------------------------------------------------------
+// Landesarchiv Baden-Württemberg (ofs21-Bildbetrachter, bild_zoom/zoom.php)
+// ---------------------------------------------------------------------
+// Diese Seiten rendern serverseitig die URL des angezeigten JPEGs in die
+// Konfiguration des im Browser laufenden Zoom-Viewers:
+//
+//   $("#imageViewerContainer4-791354").verySimpleImageViewer({
+//       imageSource: 'bild.php?drehen=&zoom=100&gamma=1&jpegQualitaetZoombild=60
+//         &scopeid_besta=7883&originalBilddatei=%2Fdata%2Fbildcms%2F...74.jpg',
+//
+// bild.php liefert den Scan serverseitig gerendert als einzelnes JPEG (keine
+// Tiles) und funktioniert OHNE Session-Cookie (ohne Cookie bestätigt:
+// HTTP 200, image/jpeg). jpegQualitaetZoombild steuert die JPEG-Qualität des
+// Renderers: 60 benutzt der Viewer (~1 MB im Beispiel), 100 liefert dieselbe
+// Auflösung mit voller Qualitätsstufe (~4 MB im Beispiel). Der bisherige
+// Formular-Download (pdfForm -> download.php) liefert dagegen eine stärker
+// komprimierte Kopie (~985 KB) mit unten angehängtem Text-/Typenschild-Balken.
+// Deshalb: Vorschau = URL wie auf der Seite, Download = gleiche URL mit
+// jpegQualitaetZoombild=100.
+//
+// Seitenzahl: <select name="originalBilddatei"> enthält ALLE Bilddateien als
+// <option value="...jpg">Bild N</option>, die angezeigte ist mit selected
+// markiert. "Bild N" ist die Bild-Nr. im Betrachter (so benennt auch der
+// Formular-Download die Datei), nicht zwangsläufig eine Registerseitenzahl.
+// Dokumenttitel steht in <div id="titel"> als erster <span>-Text
+// (z.B. "456 C Nr. 1792, 2 cm"). Die Rechtekategorie (z.B. UND = "Rechte
+// unbestimmt") steht als rightsstatements.org-Link im Seitenkopf und wird
+// für das Zitat mitgegeben.
+
+function isLandesarchivBwUrl(url) {
+  try {
+    return /(^|\.)landesarchiv-bw\.de$/i.test(new URL(url).hostname);
+  } catch (e) {
+    return false;
+  }
+}
+
+function extractLandesarchivBwBildSource(html, pageUrl) {
+  const sourceMatch = /imageSource:\s*(['"])(bild\.php\?[^'"]+)\1/i.exec(html);
+  if (!sourceMatch) return null;
+
+  const imageUrl = absoluteUrl(sourceMatch[2], pageUrl);
+  if (!imageUrl) return null;
+
+  // Volle JPEG-Qualität für den Download (siehe Kommentar oben). Fehlt der
+  // Parameter, bleibt es bei der URL, wie die Seite sie selbst benutzt.
+  let downloadUrl = imageUrl;
+  if (/jpegQualitaetZoombild=\d+/i.test(downloadUrl)) {
+    downloadUrl = downloadUrl.replace(/jpegQualitaetZoombild=\d+/i, "jpegQualitaetZoombild=100");
+  }
+
+  // Aktuell angezeigte Bilddatei: verstecktes Formularfeld (sicherster
+  // Indikator), sonst URL-Param gewaehlteSeite, sonst die selected-Option.
+  let currentFile = null;
+  const vorigeMatch = /vorigeBilddatei["'][^>]*?value=["']([^"']+)["']/i.exec(html);
+  if (vorigeMatch) currentFile = vorigeMatch[1];
+  if (!currentFile) {
+    const paramMatch = /[?&]gewaehlteSeite=([^&'"<>\s]+)/i.exec(pageUrl || "");
+    if (paramMatch) {
+      try {
+        currentFile = decodeURIComponent(paramMatch[1]);
+      } catch (e) {
+        currentFile = paramMatch[1];
+      }
+    }
+  }
+
+  // Alle Optionen einsammeln, um daraus Label und Seitenzahl zu holen.
+  const options = [];
+  const optionRe = /<option\s+value="([^"]+\.jpg)"([^>]*)>([^<]*)<\/option>/gi;
+  let optionMatch;
+  while ((optionMatch = optionRe.exec(html)) !== null) {
+    options.push({
+      file: optionMatch[1],
+      label: optionMatch[3].trim(),
+      selected: /\bselected\b/i.test(optionMatch[2])
+    });
+  }
+
+  let chosenOption = null;
+  if (currentFile) chosenOption = options.find((o) => o.file === currentFile);
+  if (!chosenOption) chosenOption = options.find((o) => o.selected);
+
+  let pageNumber = null;
+  let pageLabel = null;
+  if (chosenOption) {
+    pageLabel = chosenOption.label || null;
+    const numMatch = /^Bild\s*(\d+)$/i.exec(chosenOption.label);
+    if (numMatch) pageNumber = parseInt(numMatch[1], 10);
+  }
+
+  // Dokumenttitel (z.B. "456 C Nr. 1792, 2 cm") für ein sprechendes Label.
+  let label = null;
+  const titelMatch = /<div id="titel">[\s\S]{0,2000}?<span[^>]*>([^<]{2,200})</i.exec(html);
+  if (titelMatch) label = titelMatch[1].trim();
+
+  // Rechtekategorie, z.B. UND = Rechte unbestimmt (rightsstatements.org).
+  let rightsCategory = null;
+  const rightsMatch = /https:\/\/rightsstatements\.org\/page\/([A-Za-z0-9]+)\/1\.0\//i.exec(html);
+  if (rightsMatch) rightsCategory = rightsMatch[1].toUpperCase();
+
+  return { imageUrl, downloadUrl, label, pageLabel, pageNumber, rightsCategory };
+}
+
 
 async function fetchAndFindImageGeneric(url) {
   try {
@@ -523,6 +627,34 @@ async function fetchAndFindImageGeneric(url) {
     const meta = extractMatriculaMetaFromHtml(html);
     const label = combineMatriculaLabel(meta) || extractTitleTag(html);
     const pageNumber = meta.pageNumber !== null ? meta.pageNumber : extractPageNumberParam(url);
+
+    // Landesarchiv BW (Weg 2a-BW): bild_zoom-Seiten rendern die bild.php-URL
+    // des aktuellen Scans ins HTML - gleicher Gedanke wie Matriculas dv1.
+    // WICHTIG: BW-Seiten dürfen NICHT in die generische <img>-Heuristik
+    // fallen (Weg 2b) - sie enthalten viele UI-Grafiken (Logos, Buttons),
+    // die dort als falsches "Bild" enden würden. Fehlt die imageSource
+    // (z.B. andere BW-Seitentypen), brechen wir bewusst hier ab; content.js
+    // fällt dann auf den bekannten Formular-Download-Pfad zurück.
+    if (isLandesarchivBwUrl(url)) {
+      const bw = extractLandesarchivBwBildSource(html, url);
+      if (bw) {
+        return {
+          ok: true,
+          imageUrl: bw.imageUrl,
+          downloadUrl: bw.downloadUrl,
+          via: "bw-bild-php",
+          label: bw.label || label,
+          pageNumber: bw.pageNumber !== null ? bw.pageNumber : pageNumber,
+          pageLabel: bw.pageLabel,
+          rightsCategory: bw.rightsCategory
+        };
+      }
+      return {
+        ok: false,
+        reason:
+          "Landesarchiv-BW-Seite enthält keine bild.php-Bildquelle (vermutlich ein Seitentyp ohne Vorschau) - es wird der Formular-Download versucht."
+      };
+    }
 
     // Erst der deterministische Matricula-Sonderweg (Weg 2a): dv1-Variable
     // dekodieren -> direkte Original-JPEG-URL, genau wie die METS-Logik
@@ -1027,19 +1159,20 @@ async function findDfgViewerLinkFromArcinsys(payload) {
 }
 
 // ---------------------------------------------------------------------
-// Landesarchiv Baden-Württemberg (plink): Formular-Submit statt Link
+// Landesarchiv Baden-Württemberg (plink): Formular-Submit als Fallback
 // -----------------------------------------------------------------------
-// Diese Seiten bieten keinen direkten Bild-Link, sondern lösen den
-// Download über ein per JavaScript abgeschicktes Formular aus
+// Seit 0.16.0 wird für bild_zoom-Seiten zuerst die direkt im HTML
+// gerenderte bild.php-Bildquelle benutzt (siehe extractLandesarchivBwBild-
+// Source) - dort läuft Vorschau und Download ohne Formular. Dieser
+// Formular-Weg bleibt als Fallback für BW-Links ohne bild.php-Quelle:
+// Diese Seiten lösen den Download über ein per JavaScript abgeschicktes
+// Formular aus
 // (bestätigtes Beispiel: <a href="javascript:document.pdfForm.action=
 // 'download.php';document.pdfForm.submit();">Bilddatei herunterladen</a>).
-// Es gibt hier keinen "Vorschau"-Schritt ohne Nebenwirkung - entweder man
-// öffnet einen Tab und lässt das Formular NICHT abschicken (dann weiß man
-// nicht, ob der Download klappen wird), oder man schickt es ab und löst
-// damit den echten Download aus. Deshalb wird hier bewusst NICHT beim
-// "Bildvorschau prüfen" etwas getan (siehe content.js) - der eigentliche
-// Formular-Submit passiert erst beim expliziten "gemeinsam
-// herunterladen"-Klick, wie bei jedem anderen Download auch.
+// Ein Formular-Submit ist selbst schon der eigentliche Download-Trigger -
+// deshalb passiert der Submit hier bewusst erst beim expliziten
+// "gemeinsam herunterladen"-Klick, nicht schon bei der reinen
+// Bildvorschau-Prüfung (siehe content.js).
 // ---------------------------------------------------------------------
 
 async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
