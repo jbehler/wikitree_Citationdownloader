@@ -8,14 +8,27 @@
  *    und ausgewertet (fileSec/fileGrp = verfügbare Datei-Varianten,
  *    structMap = welche Datei zu welcher Seitenzahl gehört).
  *
- * 2) Matricula (und Fallback für andere Domains): zuerst ein einfacher
- *    HTML-Abruf mit Suche nach <img>-Tags (inkl. Kitodo/dlf-typischer
- *    id/class-Hinweise, auch ohne erkennbare Dateiendung in der URL).
- *    Schlägt das fehl, wird ein Tab mit der Seite geöffnet und kurz aktiv
- *    (!) im Vordergrund gehalten - ein rein im Hintergrund geöffneter Tab
- *    wird von Chrome bei requestAnimationFrame & Co. gedrosselt, wodurch
- *    Deep-Zoom-Viewer (Kachel-Rendering per <canvas>) oft gar nicht erst
- *    zeichnen. Nach der Auswertung wird automatisch zum vorher aktiven Tab
+ * 2) Matricula (und Fallback für andere Domains): Die Registerseiten von
+ *    data.matricula-online.eu enthalten - serverseitig gerendert, rein per
+ *    HTTP abrufbar - im letzten <script> des <body> eine JavaScript-
+ *    Variable mit den base64-kodierten Direkt-URLs ALLER Scans des
+ *    Kirchenbuchs:
+ *      dv1 = new arc.imageview.MatriculaDocView("document", {
+ *        "labels": ["001_0001", ...],
+ *        "files": ["/image/<base64-kodierte Bild-URL>/", ...]
+ *      })
+ *    Jeder files-Eintrag dekodiert zu einer direkten JPEG-URL auf
+ *    hosted-images.matricula-online.eu (http UND https erreichbar, per
+ *    Stichprobe bestätigt) -> Bilder können genau wie bei Landesarchiv
+ *    NRW als Original-JPEG angezeigt und heruntergeladen werden. Der
+ *    ?pg=N-Parameter der URL entspricht files[N-1].
+ *    Schlägt diese Extraktion fehl, greift erst eine generische Suche
+ *    nach <img>-Tags im HTML und danach der Folgende Fallback:
+ *    Ein Tab mit der Seite wird kurz aktiv (!) im Vordergrund gehalten -
+ *    ein rein im Hintergrund geöffneter Tab wird von Chrome bei
+ *    requestAnimationFrame & Co. gedrosselt, wodurch Deep-Zoom-Viewer
+ *    (Kachel-Rendering per <canvas>) oft gar nicht erst zeichnen. Nach
+ *    der Auswertung wird automatisch zum vorher aktiven Tab
  *    zurückgesprungen - das kostet aber einen kurzen, sichtbaren
  *    Tab-Wechsel.
  *
@@ -36,13 +49,14 @@
  *
  *    WICHTIG zur Historie (Matricula): Ein älteres Scraper-Projekt brauchte
  *    zur Bild-Ermittlung noch `js2py`, um Matriculas JavaScript auszuführen
- *    - ein neueres, aktiv gepflegtes Projekt kommt rein über HTTP aus, ohne
- *    JS-Ausführung. Das spricht für ein serverseitig gerendertes <img> (nur
- *    vermutlich ohne erkennbare Dateiendung). Falls das nicht greift, zeigt
- *    Matricula in der Praxis einen Deep-Zoom-Viewer mit genau einem
- *    <canvas>-Element - der Hidden/Active-Tab-Snapshot ist der Versuch,
- *    das trotzdem auszulesen; ob das gelingt, hängt davon ab, ob der
- *    Viewer innerhalb der Wartezeit tatsächlich Kacheln zeichnet.
+ *    - ein neueres, aktiv gepflegtes Projekt (matricula-online-scraper,
+ *    lsg551) kommt rein über HTTP aus, ohne JS-Ausführung. Die ursprüngliche
+ *    Annahme "serverseitig gerendertes <img>" war dabei falsch: Matricula
+ *    zeigt das Bild in einem Deep-Zoom-Viewer (<canvas>) und versteckt die
+ *    Direkt-URLs base64-kodiert in der dv1-JavaScript-Variable des HTML
+ *    (siehe Weg 2a unten) - genau diese Dekodierung nutzt auch der
+ *    HTTP-Scraper. Der Hidden/Active-Tab-Snapshot bleibt nur noch als
+ *    letzter Fallback für den Fall, dass die dv1-Extraktion scheitert.
  */
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|tiff?)(\?[^"'\s]*)?$/i;
@@ -301,7 +315,8 @@ async function fetchImageFromDfgViewerLink(dfgUrl) {
 }
 
 // ---------------------------------------------------------------------
-// Weg 2: generische HTML-Bild-Suche (z.B. Matricula, unverifiziert)
+// Weg 2b: generische HTML-Bild-Suche (Fallback; für Matricula ist Weg 2a
+// mit der dv1-Variable der verlässliche Weg)
 // ---------------------------------------------------------------------
 
 function extractCandidateImageUrlsFromHtml(html, baseUrl) {
@@ -388,6 +403,7 @@ function extractMatriculaMetaFromHtml(html) {
 
   const activeRe = /<a\b(?=[^>]*\bclass=["'][^"']*\bdocview-pagelink\b)(?=[^>]*\bclass=["'][^"']*\bactive\b)[^>]*\bdata-pg=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i;
   const am = activeRe.exec(html);
+
   if (am) {
     const label = stripHtmlEntities(am[2].replace(/<[^>]+>/g, " ")).trim();
     const numMatch = /(\d+)\s*$/.exec(label);
@@ -402,6 +418,103 @@ function combineMatriculaLabel(meta) {
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
+// ---------------------------------------------------------------------
+// Weg 2a: Matricula-Bild-URLs aus der dv1-JavaScript-Variable (bestätigt)
+// -----------------------------------------------------------------------
+// Bestätigt an Live-Seiten (z.B.
+// data.matricula-online.eu/de/deutschland/aachen/aachen-hl-kreuz/KB+001/?pg=1):
+// Das sichtbare Bild liegt in einem Deep-Zoom-Viewer (<canvas>), ABER im
+// HTML der Seite (letztes <script> im <body>) steht:
+//   dv1 = new arc.imageview.MatriculaDocView("document", {
+//     "labels": ["001_0001", ...],
+//     "files": ["/image/<base64-kodierte Bild-URL>/", ...]
+//   })
+// Jeder files-Eintrag ist "/image/" + base64(URL) + "/" und dekodiert z.B.
+// zu
+//   http://hosted-images.matricula-online.eu/images/matricula/DE-BDAA/
+//   images/17%20Matricula/DE_2187_KB_001/DE_2187_KB_001_0002.jpg
+// (HTTP 200, image/jpeg - das Original in Scan-Auflösung; https auf dem
+//selben Host ist ebenfalls bestätigt erreichbar). labels[i] gehört
+// positionell zu files[i], und ?pg=N bezeichnet files[N-1]. Gleicher
+// Ansatz wie der HTTP-Scraper matricula-online-scraper (lsg551, PyPI).
+// ---------------------------------------------------------------------
+
+function decodeBase64ToUtf8String(raw) {
+  // Tolerant gegenüber URL-safe-Alphabet (bei Matricula bisher Standard-
+  // base64, aber Schaden gibt es nicht: "-" und "_" kommen im Standard-
+  // Alphabet nie vor) und fehlender Padding. Fehler -> null statt Exception.
+  let b64 = String(raw).replace(/-/g, "+").replace(/_/g, "/");
+  const missingPadding = b64.length % 4;
+  if (missingPadding) b64 += "=".repeat(4 - missingPadding);
+  try {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder("utf-8").decode(bytes);
+  } catch (e) {
+    return null;
+  }
+}
+
+// Liefert { imageUrls: (string|null)[], labels: string[] | null } - die
+// Positionen in imageUrls entsprechen 1:1 den Einträgen in files (fehl-
+// geschlagene Dekodierung -> null an der Stelle), damit der ?pg=N-Index
+// später korrekt bleibt.
+function extractMatriculaImageUrlsFromDv1(html, baseUrl) {
+  const startMatch = /dv1\s*=\s*new\s+arc\.imageview\.MatriculaDocView/i.exec(html);
+  if (!startMatch) return null;
+  const endIdx = html.indexOf("</script>", startMatch.index);
+  const block = html.slice(startMatch.index, endIdx === -1 ? html.length : endIdx);
+
+  const filesMatch = /"files"\s*:\s*(\[[^\]]*\])/i.exec(block);
+  if (!filesMatch) return null;
+
+  let files;
+  try {
+    files = JSON.parse(filesMatch[1]);
+  } catch (e) {
+    return null;
+  }
+  if (!Array.isArray(files) || files.length === 0) return null;
+
+  let labels = null;
+  const labelsMatch = /"labels"\s*:\s*(\[[^\]]*\])/i.exec(block);
+  if (labelsMatch) {
+    try {
+      const parsed = JSON.parse(labelsMatch[1]);
+      if (Array.isArray(parsed)) labels = parsed;
+    } catch (e) {
+      /* labels sind optional - ohne sie funktioniert das Mapping trotzdem */
+    }
+  }
+
+  const imageUrls = files.map((entry) => {
+    if (typeof entry !== "string") return null;
+    let raw = entry;
+    if (raw.startsWith("/image/")) raw = raw.slice("/image/".length);
+    raw = raw.replace(/\/+$/, "");
+    if (!raw) return null;
+    const decoded = decodeBase64ToUtf8String(raw);
+    if (!decoded) return null;
+    return absoluteUrl(decoded, baseUrl) || decoded;
+  });
+
+  if (imageUrls.every((u) => !u)) return null;
+  return { imageUrls, labels };
+}
+
+// Die dekodierten URLs sind http:// - in der https-WikiTree-Seite würde
+// ein <img src="http://..."> als Mixed Content behandelt. https auf
+// matricula-online.eu-Hosts ist bestätigt erreichbar, also wird bewusst
+// hochgestuft; Nicht-Matricula-URLs bleiben unverändert.
+function upgradeMatriculaImageUrlToHttps(url) {
+  if (/^http:\/\/(?:[a-z0-9-]+\.)*matricula-online\.eu\//i.test(url)) {
+    return url.replace(/^http:/i, "https:");
+  }
+  return url;
+}
+
+
 async function fetchAndFindImageGeneric(url) {
   try {
     const res = await fetchWithTimeout(url, { credentials: "omit" });
@@ -410,9 +523,46 @@ async function fetchAndFindImageGeneric(url) {
     const meta = extractMatriculaMetaFromHtml(html);
     const label = combineMatriculaLabel(meta) || extractTitleTag(html);
     const pageNumber = meta.pageNumber !== null ? meta.pageNumber : extractPageNumberParam(url);
+
+    // Erst der deterministische Matricula-Sonderweg (Weg 2a): dv1-Variable
+    // dekodieren -> direkte Original-JPEG-URL, genau wie die METS-Logik
+    // beim Landesarchiv NRW. Wichtig: Der Index in files ist strikt
+    // positionell (?pg=N -> files[N-1], Reihenfolge der Scans im Register).
+    // meta.pageNumber (aktiver Seiten-Link, z.B. "T_197" = Kirchenbuch-
+    // Seite 197) ist NICHT der Scan-Index und wird nur fuer die Angabe
+    // "Seite N" im Dateinamen bzw. Zitat benutzt. Nur wenn das dv1 nichts
+    // liefert, greift die generische <img>-Heuristik (Weg 2b) und als
+    // letzte Rettung der Tab-Snapshot.
+    const dv1 = extractMatriculaImageUrlsFromDv1(html, url);
+    if (dv1) {
+      const pgParam = extractPageNumberParam(url);
+      const index = pgParam !== null ? pgParam - 1 : 0;
+      if (index < 0 || index >= dv1.imageUrls.length) {
+        return {
+          ok: false,
+          reason: `Seite ${pgParam} liegt außerhalb des Kirchenbuchs (das Register enthält ${dv1.imageUrls.length} Scans) - Link/Seitenzahl bitte prüfen.`
+        };
+      }
+      const chosen = dv1.imageUrls[index];
+      if (chosen) {
+        return {
+          ok: true,
+          imageUrl: upgradeMatriculaImageUrlToHttps(chosen),
+          via: "dv1-html",
+          label,
+          pageNumber: pageNumber !== null ? pageNumber : (pgParam !== null ? pgParam : 1)
+        };
+      }
+      // bewusst weiterfallen: null-Eintrag an der Zielposition -> Heuristik
+    }
+
     const candidates = extractCandidateImageUrlsFromHtml(html, url);
     if (candidates.length === 0) {
-      return { ok: false, reason: "keine Bild-URL im HTML gefunden (bei Matricula erwartbar, da dynamisch/verschlüsselt geladen)" };
+      return {
+        ok: false,
+        reason:
+          "keine Bild-URL im HTML gefunden (dv1-Variable fehlte oder war nicht dekodierbar - bei Matricula unerwartet, bitte Rückmeldung geben)"
+      };
     }
     candidates.sort((a, b) => b.length - a.length);
     return { ok: true, imageUrl: candidates[0], via: "html-guess", label, pageNumber };
@@ -424,7 +574,8 @@ async function fetchAndFindImageGeneric(url) {
 // ---------------------------------------------------------------------
 // Weg 3: Matricula-Fallback über einen kurz aktiven Tab
 // -----------------------------------------------------------------------
-// Wird nur genutzt, wenn der einfache HTML-Abruf (Weg 2) nichts findet.
+// Wird nur genutzt, wenn der HTML-Abruf (Weg 2a dv1-Variable und Weg 2b
+// generische <img>-Heuristik) nichts findet.
 // Matricula zeigt das Bild in der Praxis über einen Deep-Zoom-Viewer mit
 // genau einem <canvas>-Element. Ein rein im Hintergrund geöffneter Tab
 // wird von Chrome bei requestAnimationFrame & Co. gedrosselt - der Viewer

@@ -648,6 +648,8 @@
         const viaLabel =
           info.via === "mets"
             ? "über METS-Datei"
+            : info.via === "dv1-html"
+            ? "direkt aus Matricula-Seite (Original-JPEG)"
             : info.via === "hidden-tab"
             ? "über Hintergrund-Tab"
             : info.via === "canvas-snapshot"
@@ -657,6 +659,15 @@
         const img = document.createElement("img");
         img.src = info.imageUrl;
         img.className = "qba-thumb";
+        img.addEventListener("error", () => {
+          // z.B. gesperrte Seite ("aus gesetzlichen Gründen gesperrt")
+          // oder Server-Problem - der Download-Link kann trotzdem greifen
+          const note = document.createElement("div");
+          note.className = "qba-caveat";
+          note.textContent =
+            "⚠ Vorschau konnte nicht geladen werden (evtl. gesperrte Seite oder Server-Problem) - Download-Link unten kann trotzdem funktionieren.";
+          previewEl.insertBefore(note, img.nextSibling);
+        });
         previewEl.appendChild(img);
 
         if (info.caveat) {

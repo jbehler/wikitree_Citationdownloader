@@ -14,6 +14,33 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
 
+## Neu in Version 0.15.0
+
+- **Bildvorschau für Matricula funktioniert jetzt wie bei Landesarchiv
+  NRW (background.js, content.js):** Die Direkt-URLs der Scans stehen
+  base64-kodiert in der JavaScript-Variable `dv1` im HTML jeder
+  Matricula-Registerseite (`dv1 = new arc.imageview.MatriculaDocView(
+  "document", { "labels": [...], "files": ["/image/<base64>/", ...] })`).
+  Die Extension dekodiert diese Einträge nun per HTTP und zeigt das
+  Original-JPEG in Scan-Auflösung an (bestätigt: HTTP 200,
+  `image/jpeg`, ~1 MB pro Scan; http **und** https erreichbar - die
+  Vorschau-URL wird bewusst auf https hochgestuft, damit sie in der
+  https-WikiTree-Seite nicht als Mixed Content blockiert wird).
+  Der `?pg=N`-Parameter des Links entspricht dabei `files[N-1]`;
+  liegt die Seitenzahl außerhalb des Kirchenbuchs, erscheint eine
+  klare Fehlermeldung. Es öffnet sich **kein** sichtbares Fenster
+  mehr, und auch für das gemeinsame Herunterladen werden jetzt die
+  Original-JPEGs statt eines Canvas-Schnappschusses verwendet.
+  Der Hidden-Tab-Canvas-Schnappschuss bleibt nur noch als letzter
+  Fallback, falls die `dv1`-Extraktion scheitert.
+- **Hinweis bei gesperrten Seiten:** Einige Scans sind bei Matricula
+  „aus gesetzlichen Gründen gesperrt". Lädt die Vorschau nicht,
+  erscheint jetzt ein verständlicher Hinweis statt eines kaputten
+  Bilds (background.js, content.js).
+- **manifest.json:** Version auf 0.15.0 erhöht; Host-Permissions
+  (`https://*.matricula-online.eu/*`) decken den Bild-Host
+  bereits ab, eine Änderung war nicht nötig.
+
 ## Neu in Version 0.14.0
 
 - **Stabilität/Robustheit (background.js):** Alle externen HTTP-Abrufe
@@ -336,11 +363,15 @@ zu bestimmen.
 2. Klick öffnet das Panel.
 3. Oben im Panel „🎯 Zielfeld wählen“ klicken, dann im Editor einmal auf
    das Bio-Textfeld klicken (empfohlen, siehe oben).
-4. „Bildvorschau prüfen“ – bei Matricula kann sich dabei kurz sichtbar
-   ein großes, eigenes Fenster öffnen (für eine bessere Auflösung des
-   Schnappschusses, siehe unten) und danach automatisch wieder
-   schließen; dein vorheriges Fenster wird danach automatisch wieder
-   fokussiert. Das kann bis zu ~12 Sekunden dauern.
+4. „Bildvorschau prüfen“ – die Prüfung läuft rein per HTTP im
+   Hintergrund (kein sichtbares Fenster): Matricula-Bilder werden aus
+   der `dv1`-Variable der Registerseite dekodiert (Original-JPEG,
+   Version 0.15.0), Landesarchiv-Bilder aus der METS-Datei. Nur wenn
+   beides scheitert, kann sich als letzter Fallback kurz sichtbar ein
+   großes, eigenes Fenster öffnen (für einen Canvas-Schnappschuss,
+   siehe unten) und danach automatisch wieder schließen; dein
+   vorheriges Fenster wird danach automatisch wieder fokussiert. Das
+   kann bis zu ~12 Sekunden dauern.
 5. Checkboxen abwählen, falls einzelne Quellen nicht übernommen werden
    sollen.
 6. „Ausgewählte in Editor einfügen“.
@@ -370,35 +401,43 @@ eingebunden werden (bestätigt). Deshalb fügt die Extension **kein**
 
 ## Was verifiziert ist – und was nicht
 
-Diese Extension wurde **nicht gegen die echten Live-Seiten getestet**
-(wikitree.com blockiert automatisierten Zugriff über robots.txt, der
-Editor ist nur eingeloggt sichtbar, und matricula-online.eu /
-landesarchiv-nrw.de waren aus der Entwicklungsumgebung heraus nicht
-direkt abrufbar). Konkret unsicher/experimentell:
+Diese Extension wurde **nicht gegen die echten WikiTree-Live-Seiten
+automatisiert getestet** (wikitree.com blockiert automatisierten
+Zugriff über robots.txt, der Editor ist nur eingeloggt sichtbar).
+Matricula-Registerseiten und deren Bild-Host sind dagegen direkt per
+HTTP/HTTPS abrufbar und wurden für Version 0.15.0 live gegen eine
+Beispiel-Seite getestet (siehe unten). Konkret unsicher/experimentell:
 
 - **Bio-Feld-Einfügung:** Durch die Zielfeld-Auswahl per Klick (siehe
   oben) deutlich zuverlässiger als reine Selektor-Rateversuche. Die
   automatische Erkennung (mehrere plausible Selektoren + größtes
   `<textarea>` als Fallback) bleibt als Komfortfunktion bestehen, falls
   kein Zielfeld manuell gewählt wurde.
-- **Bild-URL-Erkennung (Matricula):** Neue Erkenntnis: Matricula läuft
-  laut öffentlichen Quellen auf **Kitodo.Presentation** – demselben
-  METS-Ökosystem wie der DFG-Viewer. Ein aktiv gepflegtes, rein
-  HTTP-basiertes Scraper-Projekt (`matricula-online-scraper` von lsg551,
-  auf PyPI) kommt inzwischen ganz ohne JavaScript-Ausführung aus, im
-  Gegensatz zu einem älteren Projekt, das dafür `js2py` brauchte. Das legt
-  nahe, dass zumindest eine Standardauflösung serverseitig als normales
-  `<img>`-Tag ausgeliefert wird, vermutlich über eine URL ohne erkennbare
-  Dateiendung (Kitodo-typisch, z. B. `/Rendering/...`). Deshalb versucht
-  die Extension bei Matricula jetzt **zuerst** die günstige HTML-Methode
-  (mit gelockertem Filter: `<img>`-Tags mit Kitodo/dlf-typischen
-  id/class-Hinweisen zählen jetzt auch ohne `.jpg`-Endung in der URL) und
-  **nur wenn das nichts findet**, den aufwändigeren Hidden-Tab-Versuch mit
-  Canvas-Snapshot als Fallback (siehe unten). Nicht verifiziert: Ich
-  konnte die tatsächliche HTML-Struktur einer Matricula-Seite in dieser
-  Session nicht direkt einsehen (robots.txt blockiert meinen Fetch-Zugriff
-  auch auf einzelne Seiten) - die id/class-Muster sind daher plausible,
-  aber ungetestete Annahmen.
+- **Bild-URL-Erkennung (Matricula): Bestätigt funktionierend (Version
+  0.15.0):** Die Direkt-URLs der Scans stehen base64-kodiert in der
+  JavaScript-Variable `dv1` im HTML jeder Matricula-Registerseite
+  (serverseitig gerendert, rein per HTTP abrufbar - es wird kein
+  JavaScript ausgeführt):
+  `dv1 = new arc.imageview.MatriculaDocView("document", { "labels":
+  [...], "files": ["/image/<base64-kodierte Bild-URL>/", ...] })`.
+  Jeder `files`-Eintrag dekodiert zu einer direkten JPEG-URL auf
+  `hosted-images.matricula-online.eu` (http **und** https erreichbar).
+  Live gegen die Beispiel-Seite (Aachen Hl. Kreuz, KB 001) geprüft:
+  164 Seiten, alle 164 URLs dekodierbar, `?pg=N` entspricht
+  `files[N-1]` (pg=1 → `..._0001.jpg`, pg=2 → `..._0002.jpg`),
+  https-HEAD auf das Original-JPEG: HTTP 200, `image/jpeg`, ~1 MB.
+  Die ursprüngliche Annahme „serverseitig gerendertes `<img>`
+  (Kitodo-typisch)" war damit falsch: Matricula zeigt das Bild in
+  einem Deep-Zoom-Viewer (`<canvas>`) und versteckt die Direkt-URLs
+  in `dv1` - genau diese Dekodierung nutzt auch der rein HTTP-
+  basierte Scraper `matricula-online-scraper` (lsg551, PyPI). Der
+  Hidden-Tab-Versuch mit Canvas-Snapshot bleibt **nur noch als
+  letzter Fallback**, falls die `dv1`-Extraktion scheitert (siehe
+  unten). Hinweis: Einige Scans sind bei Matricula „aus gesetzlichen
+  Gründen gesperrt" - bei diesen lädt die Vorschau nicht, das Panel
+  zeigt dann statt eines kaputten Bilds einen verständlichen
+  Hinweis; die Quellenangabe (Link + Lizenz) ist davon unabhängig
+  korrekt.
 
   Falls auch das nichts findet, greift weiterhin ein Fallback-Versuch:
   Die Seite wird bewusst in einem eigenen, **großen, fokussierten**
