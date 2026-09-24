@@ -2,10 +2,11 @@
 
 Chrome/Edge-Extension (Manifest V3). Sucht auf einer geöffneten WikiTree-
 Profilseite nach bereits im Text vorhandenen Links zu `matricula-online.eu`,
-zu `dfg-viewer.de` (Landesarchiv NRW) und zu `landesarchiv-bw.de`
-(Landesarchiv Baden-Württemberg), prüft auf eine einbettbare
-Bildvorschau und fügt eine korrekt formatierte Quellenangabe (inkl.
-Lizenztext) in den Bio-Editor ein.
+zu `dfg-viewer.de` (Landesarchiv NRW), zu `landesarchiv-bw.de`
+(Landesarchiv Baden-Württemberg) und zur dLibra-Digitalbibliothek
+`wbc.poznan.pl` (Wielkopolska Digital Library, Poznań), prüft auf eine
+einbettbare Bildvorschau und fügt eine korrekt formatierte Quellenangabe
+(inkl. Lizenztext) in den Bio-Editor ein.
 
 **Hinweis zu Landesarchiv NRW:** Die Digitalisate werden nicht direkt über
 eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
@@ -14,6 +15,86 @@ eine `archive.nrw.de`-Adresse angezeigt, sondern über den DFG-Viewer
 `tx_dlf[page]` auf die Seitenzahl. Die Extension liest diese METS-Datei
 direkt aus (offener Standard), um daraus die Bild-URL der jeweiligen Seite
 zu bestimmen.
+
+## Neu in Version 0.17.1
+
+- **Bugfix Download-Umleitung (background.js):** Der `onDeterminingFilename`-
+  Listener für die Landesarchiv-BW-Formular-Downloads wurde bisher pro Lauf
+  dynamisch registriert und wieder entfernt. Chrome erlaubt für dieses
+  Ereignis aber ausdrücklich nur **genau einen Listener pro Extension**, der
+  `suggest()` genau einmal aufruft. Überlappende Läufe oder verspätet
+  ausgelieferte Ereignisse (schnelle Downloads, Service-Worker-Neustart)
+  führten deshalb zu `Unchecked runtime.lastError: Unexpected determineFilename
+  call` in der Konsole. Jetzt: genau ein persistenter Listener, synchron beim
+  Service-Worker-Start registriert, der nur Downloads übernimmt, die
+  nachweislich aus einem eigenen Formular-Lauf stammen (ID-Abgleich über
+  `onCreated`, Fallback: erster noch erwarteter Download desselben Hosts wie
+  die geöffnete plink-Seite). Downloads mit `byExtensionId` – also auch alle
+  eigenen `chrome.downloads.download`-Aufrufe – werden nie angetastet, und
+  fremde Downloads, die zufällig während eines Laufs starten, behalten ihren
+  Standardnamen statt umbenannt zu werden.
+- **Seitenangabe im Zitat: Dokumentenseite vs. Beschreibungs-Hinweis
+  (content.js):** Im Zitat gibt es je nach Quelltyp zwei mögliche
+  Seitenzahlen: den Hinweis aus der Quellenbeschreibung („S. 12“ im
+  Textumfeld des Links) und die tatsächlich ermittelte Dokumentenseite des
+  Digitalisats (gewählte Seite bei dLibra, „Bild 74“ bei Landesarchiv BW,
+  aktiver Seiten-Link bei Matricula, `tx_dlf[page]` bei METS/DFG-Viewer).
+  Künftig gilt: **Beide werden angezeigt, wenn sie abweichen** – z. B.
+  „(Seite 12, im Dokument Bild 74)“; so bleibt erkennbar, was die
+  Beschreibung angibt und wo es im Digitalisat tatsächlich liegt. Stimmen
+  beide überein, genügt „(Seite N)“ – der Hinweis ist dann durch das
+  Digitalisat bestätigt. Ist nur eine Angabe bekannt, wird nur diese
+  gezeigt; ein alleiniger Beschreibungs-Hinweis bleibt ausdrücklich als
+  „vermutlich“ gekennzeichnet (bei Landesarchiv BW stand er bisher ohne
+  diesen Vorbehalt als feste Seite im Zitat). Matricula- und DFG-Viewer-
+  Zitate zeigen eine ermittelte Seite jetzt überhaupt erst an; für dLibra
+  (wbc.poznan.pl) ändert sich nichts, weil die gewählte Seite dort immer
+  der Beschreibungs-Hinweis ist, wenn einer vorhanden war.
+
+
+
+## Neu in Version 0.17.0
+
+- **dLibra-Links (wbc.poznan.pl) werden jetzt automatisiert verarbeitet
+  (background.js, content.js).** Bisher (seit 0.12.0) wurden
+  wbc.poznan.pl-Links bewusst nicht automatisiert, weil die damalige
+  Beispiel-Publikation den Hinweis „Secured publication" zeigte. Neu
+  nachgeprüft: Dieser Text ist Teil der allgemeinen Dialog-Templates der
+  dLibra-Seiten und erscheint auch bei frei zugänglichen Publikationen –
+  daraus lässt sich keine verlässliche Aussage ableiten. Die Zugänglichkeit
+  steht stattdessen maschinenlesbar im METS (`dlibra_avs:PublicAccess`):
+  `true` = frei (Beispielpublikation 147448/156210, live geprüft), `false` =
+  geschützt → dann ehrliche Meldung statt Umgehungsversuch.
+- **Weg 3 (wbc.poznan.pl): METS über den OAI-Endpunkt.** dLibra liefert für
+  jede Edition METS-XML über `/dlibra/oai-pmh-repository.xml?verb=GetRecord
+  &metadataPrefix=mets&identifier=oai:<host>:<editionId>` (Muster steht im
+  `data-oaiurl`-Attribut der Content-Seite, live verifiziert). Aus den METS
+  kommen: Titel (mets LABEL/dc:title), dc:date, dc:rights und der fileSec
+  mit allen Seiten-Dateien (`DjVu_original<N>` = Seite N+1; die
+  Gesamtdokument-Datei `index.djvu` wird ausgeklammert). Seitenreihenfolge
+  über die ID-Suffixe – die structMap enthält kein ORDER-Attribut.
+- **DjVu-Ehrlichkeit:** dLibra-Holdings sind häufig DjVu-Dateien
+  (`image/x.djvu`, live geprüft: HTTP 200, ~1 MB/Seite). DjVu ist kein
+  `<img>`-fähiges Format – statt eines kaputten Vorschaubilds erscheint der
+  Status „Quelle geprüft – Bildvorschau hier nicht möglich" mit klarer
+  Erklärung, und der Download-Link liefert die `.djvu`-Datei der Zielseite
+  (z.B. mit DjVuViewer/GIMP öffnen und als JPEG speichern). Bei
+  JPEG-/PNG-Holdings funktioniert Vorschau+Download wie bei den METS-Quellen
+  des DFG-Viewers.
+- **Quellenangabe mit Objekt-Metadaten:** Titel (aus METS), Seitenzahl (aus
+  der Quellenbeschreibung oder gewählter Seite) und Rechteangabe
+  (dc:rights, z.B. „Biblioteka Uniwersytecka w Poznaniu") werden ins Zitat
+  übernommen; eine Lizenz wird bewusst NICHT behauptet (nicht verifiziert).
+- **Server-Browserprüfung (PoW-Challenge) ehrlich gemeldet:** Bei
+  Nicht-Browser-UAs antwortet wbc.poznan.pl zeitweise mit „High Load –
+  Verifying Browser" (JS-Proof-of-Work, Cookie `captcha_pow`). Die
+  Extension umgeht das bewusst nicht: Wird die Challenge erkannt, erscheint
+  der Hinweis, die Quelle einmal normal im Browser zu öffnen (der Server
+  setzt dabei sein Prüf-Cookie) und die Prüfung danach zu wiederholen. Im
+  Extension-Fetch (Browser-UA + Cookie-Jar) läuft der Abruf sonst wie im
+  Browser.
+- **manifest.json:** Version 0.17.0; neue `host_permissions`:
+  `https://*.wbc.poznan.pl/*` und `https://wbc.poznan.pl/*`.
 
 ## Neu in Version 0.16.1
 

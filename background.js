@@ -784,6 +784,274 @@ function resolveLandesarchivBwPlinkScreenRedirect(html, finalUrl) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Weg 3: wbc.poznan.pl (dLibra, Wielkopolska Digital Library)
+// -----------------------------------------------------------------------
+// dLibra-Links sehen z.B. so aus:
+//   https://www.wbc.poznan.pl/dlibra/publication/147448/edition/156210/content
+// Die HTML-Seite selbst enthaelt Dialog-Templates ("Secured publication",
+// reCAPTCHA), die auch bei frei zugaenglichen Publikationen im Markup
+// liegen - daraus laesst sich KEINE zuverlaessige Aussage ableiten (in
+// 0.12.0 fuehrte das zur pauschalen Nichtautomatisierung; live verifiziert:
+// die Beispielpublikation ist offen abrufbar und im METS steht
+// dlibra_avs:PublicAccess = "true").
+//
+// Verlaesslicher Weg (live verifiziert): dLibra liefert fuer jede Edition
+// METS-XML ueber den eigenen OAI-Endpunkt. Das data-oaiurl-Attribut der
+// Content-Seite zeigt das Muster:
+//   /dlibra/oai-pmh-repository.xml?verb=GetRecord&metadataPrefix=mets
+//     &identifier=oai:<host>:<editionId>
+// In den METS: fileSec mit fileGrp USE="original" (file IDs wie
+// "DjVu_original<N>" -> FLocat xlink:href = URL von Seite N+1, 0-basiert)
+// und structMap; die Gesamtdokument-Datei (dLibra-Konvention: basename
+// "index.*") gehoert NICHT zu den Einzelseiten. dmdSec liefert Titel
+// (mets LABEL bzw. dc:title), dc:date und dc:rights fuer das Zitat.
+//
+// Format-Ehrlichkeit: dLibra-Holdings sind oft DjVu (image/x.djvu, live:
+// HTTP 200, ~1 MB/Seite). DjVu ist kein <img>-faehiges Format - die
+// Vorschau im Panel ist dann bewusst NICHT moeglich (previewUnavailable),
+// stattdessen Download-Link der Zielseite mit klarer Erklaerung. Bei
+// JPEG-/PNG-Holdings funktioniert Vorschau+Download wie bei Weg 1.
+//
+// Server-Besonderheit (live beobachtet): Bei Nicht-Browser-UAs antwortet
+// wbc.poznan.pl zeitweise mit einer JS-Proof-of-Work-Seite ("High Load -
+// Verifying Browser", setzt Cookie captcha_pow). Diese Pruefung wird NICHT
+// automatisiert umgangen (gleiche Haltung wie bei Captcha-Sperren):
+// erkannt und ehrlich gemeldet. Im normalen Browser (und damit im
+// Extension-Fetch mit Browser-UA und Cookie-Jar) ist die Seite normal
+// erreichbar; hilft: die Quelle einmal im Browser oeffnen, dann erneut
+// pruefen.
+// ---------------------------------------------------------------------
+
+function isWbcPoznanDlibraUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)(wbc\.poznan\.pl)$/i.test(u.hostname)) return false;
+    return /\/dlibra\//i.test(u.pathname) || /\/Content\/\d+/i.test(u.pathname);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Editions-ID aus den bekannten dLibra-URL-Formen:
+//   /dlibra/publication/<pub>/edition/<ed>/content   -> ed
+//   /dlibra/publication/edition/<ed>/...             -> ed (dc:identifier-Variante)
+//   /Content/<ed>/... (direkte Datei-/Download-URLs) -> ed
+//   /dlibra/docmetadata?id=<ed>&from=edition         -> ed (NUR bei from=edition;
+//        bei from=publication ist id eine Publikations-ID und unbrauchbar
+//        fuer den edition-bezogenen METS-Abruf)
+function extractWbcEditionId(url) {
+  try {
+    const u = new URL(url);
+    const edition = /\/edition\/(\d+)/i.exec(u.pathname);
+    if (edition) return edition[1];
+    const content = /\/Content\/(\d+)/i.exec(u.pathname);
+    if (content) return content[1];
+    const idParam = u.searchParams.get("id");
+    if (idParam && /^\d+$/.test(idParam) && (u.searchParams.get("from") || "edition") === "edition") {
+      return idParam;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Muster aus dem data-oaiurl-Attribut der Content-Seite (live verifiziert
+// fuer Edition 156210). Der Identifier nutzt den Host der Anfrage ohne
+// Pfad - derselbe Code funktioniert damit auch fuer andere dLibra-Instanzen.
+function buildWbcOaiMetsUrl(editionId, requestUrl) {
+  try {
+    const u = new URL(requestUrl);
+    const identifier = `oai:${u.hostname}:${editionId}`;
+    return `https://${u.hostname}/dlibra/oai-pmh-repository.xml?verb=GetRecord&metadataPrefix=mets&identifier=${encodeURIComponent(identifier)}`;
+  } catch (e) {
+    return null;
+  }
+}
+
+// PoW-Challenge-Seite erkennen ("High Load - Verifying Browser"; kleine
+// HTML-Seite, die per JS das Cookie captcha_pow setzt). Nicht loesen,
+// nicht umgehen - ehrlich melden.
+function looksLikeWbcPowChallenge(body) {
+  return /High Load\s*-\s*Verifying Browser/i.test(body || "") || /captcha_pow/i.test(body || "");
+}
+
+// Text eines XML-Elements, tolerant gegenueber Namespace-Praefix, CDATA
+// und eingebetteten Kind-Elementen; Entities werden dekodiert.
+function extractCdataOrText(xml, tagName) {
+  const re = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
+  const m = re.exec(xml || "");
+  if (!m) return null;
+  let val = m[1];
+  const cdata = /<!\[CDATA\[([\s\S]*?)\]\]>/.exec(val);
+  if (cdata) val = cdata[1];
+  return stripHtmlEntities(val.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim() || null;
+}
+
+// Titel/Datum/Rechte aus dem METS (dmdSec) - fuer Label und Zitat.
+function extractWbcMetaFromMets(xml) {
+  // Titel: LABEL-Attribut des <mets>-Elements (identisch mit dc:title),
+  // tolerant gegenueber Namespace-Praefix und einfachen Anfuehrungszeichen.
+  let title = null;
+  const metsOpening = findAllTagOpenings(xml || "", "mets").find((o) => getAttr(o.attrs, "LABEL"));
+  if (metsOpening) title = getAttr(metsOpening.attrs, "LABEL");
+  if (!title) title = extractCdataOrText(xml, "dc:title");
+  return {
+    title: title || null,
+    date: extractCdataOrText(xml, "dc:date"),
+    rights: extractCdataOrText(xml, "dc:rights"),
+  };
+}
+
+// dlibra_avs:PublicAccess aus dem METS: "true" = frei zugaenglich,
+// "false" = geschuetzte Publikation (Zugang nur nach Anfrage/Login).
+function extractWbcPublicAccess(xml) {
+  const val = extractCdataOrText(xml, "dlibra_avs:PublicAccess");
+  return val ? val.toLowerCase() : null;
+}
+
+// Seitenliste aus dem fileSec: fileGrp USE="original", file IDs mit
+// numerischem Suffix (z.B. DjVu_original7 = Seite 8, 0-basiert).
+// Die Gesamtdokument-Datei (dLibra-Konvention: basename "index.*") wird
+// ausgeklammert. dLibra-structMaps haben KEIN ORDER-Attribut (live: die
+// phys-Divs stehen dort sogar unsortiert) - die ID-Suffixe sind die
+// verlaessliche Seitenreihenfolge.
+function extractWbcPageFilesFromMets(xml, baseUrl) {
+  const groups = extractFileGroups(xml, baseUrl);
+  const entries = [];
+  let wholeDocumentUrl = null;
+  for (const fileId of Object.keys(groups)) {
+    const useMap = groups[fileId];
+    const url = useMap.ORIGINAL || useMap.original || Object.values(useMap)[0];
+    if (!url) continue;
+    let base = null;
+    try {
+      base = new URL(url).pathname.split("/").pop();
+    } catch (e) {
+      base = null;
+    }
+    if (base && /^index\./i.test(base)) {
+      if (!wholeDocumentUrl) wholeDocumentUrl = url;
+      continue;
+    }
+    const suffix = /(\d+)\s*$/.exec(fileId);
+    entries.push({ url, order: suffix ? parseInt(suffix[1], 10) : Number.MAX_SAFE_INTEGER });
+  }
+  entries.sort((a, b) => a.order - b.order || String(a.url).localeCompare(String(b.url)));
+  return { pageUrls: entries.map((e) => e.url), wholeDocumentUrl };
+}
+
+// Hauptlogik fuer FIND_IMAGE_FOR_WBC_DLIBRA.
+// payload: { url, pageNumber } - pageNumber kommt aus der Seitenzahl-
+// Erkennung der Quellenbeschreibung (citedPageHint) oder ist null (=1).
+async function findImageFromWbcDlibra(payload) {
+  const url = payload && payload.url;
+  const pageNumber = payload && payload.pageNumber;
+  if (!isWbcPoznanDlibraUrl(url)) {
+    return { ok: false, reason: "Keine dLibra-URL von wbc.poznan.pl erkannt." };
+  }
+  const editionId = extractWbcEditionId(url);
+  if (!editionId) {
+    return {
+      ok: false,
+      reason:
+        "Keine Editions-ID in der dLibra-URL erkannt (erwartet: /dlibra/publication/<id>/edition/<edId>/content oder /Content/<edId>/...). Bitte den Quellen-Link auf die Inhaltsseite der Edition verwenden."
+    };
+  }
+  const metsUrl = buildWbcOaiMetsUrl(editionId, url);
+  if (!metsUrl) return { ok: false, reason: "Konnte die OAI-METS-URL nicht bauen." };
+
+  let res;
+  try {
+    // credentials: "include" - der Server setzt gelegentlich ein Prüf-Cookie
+    // (captcha_pow), das im Cookie-Jar des Nutzers liegt, sobald er die
+    // Seite im Browser geöffnet hat. Damit läuft der Abruf wie im Browser.
+    res = await fetchWithTimeout(metsUrl, { credentials: "include" });
+  } catch (e) {
+    return { ok: false, reason: `Fehler beim Laden der METS-Datei: ${String(e)}` };
+  }
+  if (!res.ok) {
+    return { ok: false, reason: `HTTP ${res.status} beim Laden der METS-Datei (${metsUrl})` };
+  }
+  const xml = await res.text();
+  if (looksLikeWbcPowChallenge(xml)) {
+    return {
+      ok: false,
+      reason:
+        'Der Server von wbc.poznan.pl verlangt gerade eine JavaScript-Browserprüfung ("High Load - Verifying Browser"). Diese wird bewusst nicht automatisiert umgangen: Bitte die Quelle einmal normal im Browser öffnen (dabei setzt der Server sein Prüf-Cookie) und danach die Prüfung hier erneut starten.'
+    };
+  }
+  // OAI-Fehler (z.B. idDoesNotExist) sauber abfangen statt still zu scheitern.
+  const oaiError = /<error\s+code=["']([a-zA-Z]+)["']/i.exec(xml);
+  if (oaiError) {
+    return {
+      ok: false,
+      reason: `OAI-Fehler (${oaiError[1]}) für Edition ${editionId} - stimmt die Editions-ID im Quellen-Link?`
+    };
+  }
+  if (!/<(?:\w+:)?mets\b/i.test(xml)) {
+    return { ok: false, reason: `Keine METS-Daten für Edition ${editionId} erhalten (unerwartete Antwort).` };
+  }
+  const access = extractWbcPublicAccess(xml);
+  if (access && /^false$/.test(access)) {
+    return {
+      ok: false,
+      reason:
+        'Diese Publikation ist bei wbc.poznan.pl als nicht öffentlich markiert (PublicAccess=false, "Secured publication", Zugang nur nach Anfrage/reCAPTCHA). Das wird bewusst nicht automatisiert umgangen - bitte im Browser öffnen bzw. beim Institut um Zugang bitten und manuell herunterladen.'
+    };
+  }
+  const pages = extractWbcPageFilesFromMets(xml, res.url || metsUrl);
+  const meta = extractWbcMetaFromMets(xml);
+  const pageCount = pages.pageUrls.length;
+
+  // Seitenwahl: pageNumber (aus der Quellenbeschreibung) oder Seite 1.
+  const page = pageNumber && Number.isFinite(pageNumber) ? pageNumber : 1;
+  let chosenUrl = page >= 1 && page <= pageCount ? pages.pageUrls[page - 1] : null;
+  let usedWholeDocument = false;
+  if (!chosenUrl && pageCount === 0 && pages.wholeDocumentUrl) {
+    // Editionen ohne Einzelseiten (z.B. nur das Gesamtdokument als PDF/DjVu)
+    chosenUrl = pages.wholeDocumentUrl;
+    usedWholeDocument = true;
+  }
+  if (!chosenUrl) {
+    return {
+      ok: false,
+      reason:
+        pageCount > 0
+          ? `Seite ${page} liegt außerhalb der Edition (die Edition enthält ${pageCount} Einzelseiten) - Link/Seitenzahl bitte prüfen.`
+          : "In den METS-Daten der Edition wurden weder Einzelseiten noch eine Gesamtdokument-Datei gefunden."
+    };
+  }
+
+  const base = {
+    ok: true,
+    imageUrl: chosenUrl,
+    downloadUrl: chosenUrl,
+    label: meta.title || null,
+    pageNumber: usedWholeDocument ? null : page,
+    pageCount,
+    rightsHolder: meta.rights || null,
+  };
+
+  if (IMAGE_EXT_RE.test(chosenUrl)) {
+    // JPEG/PNG/etc. -> Vorschau+Download wie bei den METS-Quellen des
+    // DFG-Viewers (Weg 1).
+    return { ...base, via: "dlibra-oai-mets" };
+  }
+
+  // DjVu (image/x.djvu, dLibra-Standard fuer gescannte Verlustlisten etc.):
+  // Browser zeigen DjVu nativ NICHT an - eine <img>-Vorschau waere kaputt.
+  // Bewusst ehrlich: keine Vorschau, dafuer Download der Zielseite.
+  return {
+    ...base,
+    via: "dlibra-djvu",
+    previewUnavailable: true,
+    caveat:
+      "Die Seite liegt als DjVu-Datei vor (kein vom Browser direkt anzeigbares Bildformat) - Vorschau im Panel daher nicht möglich. Der Download-Link liefert die .djvu-Datei der Zielseite (mit z.B. DjVuViewer oder GIMP öffnen und als JPEG speichern)."
+  };
+}
+
 async function fetchAndFindImageGeneric(url) {
   try {
     const res = await fetchWithTimeout(url, { credentials: "omit" });
@@ -1390,6 +1658,72 @@ async function findDfgViewerLinkFromArcinsys(payload) {
   }
 }
 
+// -----------------------------------------------------------------------
+// Zentrale Dateinamen-Bestimmung für Formular-Downloads (persistent)
+// -----------------------------------------------------------------------
+// Chrome-Vertrag (developer.chrome.com, downloads.onDeterminingFilename):
+//  - "Each extension may not register more than one listener for this
+//    event."
+//  - "Each listener must call suggest exactly once, either synchronously
+//    or asynchronously. If the listener calls suggest asynchronously,
+//    then it must return true. If the listener neither calls suggest
+//    synchronously nor returns true, then suggest will be called
+//    automatically."
+// Der bisher dynamische, pro submitFormAndDownload-Lauf registrierte
+// Listener verstieß in Randfällen gegen genau das: zwei überlappende
+// Läufe registrierten zwei Listener (=> doppelter suggest-Aufruf) und
+// verspätet ausgelieferte Ereignisse (schnelle Downloads, Service-Worker-
+// Neustart) trafen einen bereits abgeschlossenen suggest-Zustand. Das
+// ergab in der Konsole: "Unchecked runtime.lastError: Unexpected
+// determineFilename call". Zusätzlich benannte der alte Listener JEDEN
+// Download im Browser um, der während des Laufs startete - auch fremde.
+//
+// Seit 0.17.1: genau EIN persistenter Listener, synchron beim
+// Service-Worker-Start registriert. Er greift nur für Downloads, die
+// nachweislich aus einem unserer Formular-Läufe stammen:
+//  1. ID-Abgleich - die Download-ID kam vorher über onCreated herein
+//     (onDeterminingFilename feuert typischerweise ERST NACH onCreated,
+//     Bugfix 0.13.1/0.14.0),
+//  2. Fallback für den Fall "Bestimmung feuert VOR onCreated": der erste
+//     noch erwartete Download desselben Hosts wie die geöffnete plink-
+//     Seite.
+// Downloads mit byExtensionId (eigene chrome.downloads.download-Aufrufe
+// tragen ihren Dateinamen bereits als Parameter; auch fremde Extensions)
+// werden nie angetastet. Für alle anderen Downloads wird suggest NICHT
+// gerufen - Chrome ruft es dann automatisch ohne Argumente auf
+// (Standard-Dateiname, kein lastError).
+
+let activePlinkFormFlows = [];
+
+function claimPlinkFormFlowForItem(item) {
+  if (item.byExtensionId) return null;
+  for (const flow of activePlinkFormFlows) {
+    if (flow.itemIds.has(item.id)) return flow;
+  }
+  const expecting = activePlinkFormFlows.filter((f) => f.expectingFirstDownload);
+  if (expecting.length === 1 && expecting[0].origin && item.url && item.url.indexOf(expecting[0].origin) === 0) {
+    return expecting[0];
+  }
+  return null;
+}
+
+function onDeterminingFilenameGlobal(item, suggest) {
+  const flow = claimPlinkFormFlowForItem(item);
+  if (!flow) return; // kein eigener Download -> suggest() automatisch durch Chrome (Standard-Name)
+  flow.itemIds.add(item.id);
+  flow.expectingFirstDownload = false;
+  const extMatch = /\.[a-z0-9]{2,5}$/i.exec(item.filename || "");
+  const ext = extMatch ? extMatch[0] : "";
+  suggest({ filename: `${sanitizeForFilesystem(flow.folder)}/${sanitizeForFilesystem(flow.suggestedNameBase)}${ext}` });
+  if (flow.resolveFilenameDetermination) {
+    const resolve = flow.resolveFilenameDetermination;
+    flow.resolveFilenameDetermination = null;
+    resolve(true);
+  }
+}
+
+chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilenameGlobal);
+
 // ---------------------------------------------------------------------
 // Landesarchiv Baden-Württemberg (plink): Formular-Submit als Fallback
 // -----------------------------------------------------------------------
@@ -1409,15 +1743,60 @@ async function findDfgViewerLinkFromArcinsys(payload) {
 
 async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
   let tab = null;
-  let removeFilenameListener = null; // Cleanup für den onDeterminingFilename-Listener
+  let flow = null;
 
   try {
+    let plinkOrigin = "";
+    try {
+      plinkOrigin = new URL(plinkUrl).origin;
+    } catch (e) {
+      /* URL nicht parsebar -> Fallback der Bestimmung läuft nur über den ID-Abgleich */
+    }
+
     tab = await chrome.tabs.create({ url: plinkUrl, active: false });
     await waitForTabComplete(tab.id);
+
+    // WICHTIG (Bugfix 0.13.1, in 0.14.0 verfeinert, seit 0.17.1 global):
+    // onDeterminingFilename feuert typischerweise ERST NACH onCreated
+    // (Chrome muss dafür ggf. erst Header wie Content-Disposition
+    // auswerten). Der Listener selbst ist jetzt persistent (siehe oben) -
+    // hier wird nur der Anspruch für genau diesen Formular-Download
+    // registriert. onCreated liefert die Download-ID, damit der globale
+    // Listener den eigenen Download sicher erkennen kann; der 8-Sekunden-
+    // Sicherheitsnetz-Timeout startet weiterhin erst, wenn der Download
+    // tatsächlich registriert wurde.
+    flow = {
+      folder,
+      suggestedNameBase,
+      origin: plinkOrigin,
+      itemIds: new Set(),
+      expectingFirstDownload: true,
+      resolveFilenameDetermination: null,
+    };
+    activePlinkFormFlows.push(flow);
+    const filenameDeterminedPromise = new Promise((resolve) => {
+      flow.resolveFilenameDetermination = resolve;
+    });
 
     const downloadPromise = new Promise((resolve) => {
       const createdListener = (item) => {
         chrome.downloads.onCreated.removeListener(createdListener);
+        // onCreated feuert für ALLE Downloads im Browser - übernommen wird
+        // nur der eigene (gleicher Host wie die plink-Seite, nicht per
+        // downloads-API gestartet); bei fremden wird weiter gewartet.
+        // Gibt es MEHRERE noch erwartende Läufe (überlappende Aufrufe),
+        // ist keine eindeutige Zuordnung möglich: der Lauf wird trotzdem
+        // aufgelöst (ehrliche Meldung "Vorschlag griff nicht"), aber ohne
+        // den Anspruch - kein falsches Umbenennen.
+        if (flow) {
+          if (item.byExtensionId) return;
+          if (flow.origin && item.url && item.url.indexOf(flow.origin) !== 0) return;
+          const expectingCount = activePlinkFormFlows.filter((f) => f.expectingFirstDownload).length;
+          if (expectingCount === 1) {
+            flow.itemIds.add(item.id);
+            flow.expectingFirstDownload = false;
+          }
+        }
         resolve(item);
       };
       chrome.downloads.onCreated.addListener(createdListener);
@@ -1426,47 +1805,6 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
         resolve(null);
       }, 10000);
     });
-
-    // WICHTIG (Bugfix 0.13.1, in 0.14.0 verfeinert): onDeterminingFilename
-    // feuert typischerweise ERST NACH onCreated (Chrome muss dafür ggf.
-    // erst Header wie Content-Disposition auswerten). Der Listener darf
-    // deshalb nicht schon entfernt werden, sobald downloadPromise
-    // (onCreated) aufgelöst ist - das hätte den eigenen Vorschlag nie
-    // wirksam werden lassen und erklärt frühere Fehlschläge (Datei landete
-    // unbenannt im Standard-Downloads-Ordner).
-    //
-    // Verfeinerung 0.14.0: Der Listener wird weiterhin VOR dem Submit
-    // registriert, aber der 8-Sekunden-Sicherheitsnetz-Timeout startet jetzt
-    // erst, wenn der Download tatsächlich registriert wurde - vorher hätte
-    // der Timeout den Listener löschen können, während der Download bei
-    // einem langsamen Server noch gar nicht anlief. Zusätzlich wird der
-    // Listener auf ALLEN Abbruchwegen aufgeräumt (kein Formular, kein
-    // Download, Fehler), damit er nicht unnötig registriert bleibt.
-    let filenameListenerActive = true;
-    let filenameTimeoutId = null;
-    let resolveFilenameDetermination = null;
-    const filenameDeterminedPromise = new Promise((resolve) => {
-      resolveFilenameDetermination = resolve;
-    });
-    function onDeterminingFilename(item, suggest) {
-      chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
-      filenameListenerActive = false;
-      if (filenameTimeoutId) clearTimeout(filenameTimeoutId);
-      const extMatch = /\.[a-z0-9]{2,5}$/i.exec(item.filename || "");
-      const ext = extMatch ? extMatch[0] : "";
-      const safeFolder = sanitizeForFilesystem(folder);
-      const safeBase = sanitizeForFilesystem(suggestedNameBase);
-      suggest({ filename: `${safeFolder}/${safeBase}${ext}` });
-      resolveFilenameDetermination(true);
-    }
-    chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
-    removeFilenameListener = () => {
-      if (filenameTimeoutId) clearTimeout(filenameTimeoutId);
-      if (filenameListenerActive) {
-        chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
-        filenameListenerActive = false;
-      }
-    };
 
     const execResult = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -1486,30 +1824,26 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
 
     const submitted = !!(execResult && execResult[0] && execResult[0].result && execResult[0].result.submitted);
     if (!submitted) {
-      removeFilenameListener();
       return { ok: false, reason: "Formular \"pdfForm\" (bzw. ein Formular mit download.php-Ziel) wurde auf der Seite nicht gefunden." };
     }
 
     const item = await downloadPromise;
     if (!item) {
-      removeFilenameListener();
       return { ok: false, reason: "Formular wurde abgeschickt, aber innerhalb von 10 Sekunden wurde kein Download registriert." };
     }
 
     // Sicherheitsnetz-Timeout erst ab jetzt: Der Download ist registriert,
     // jetzt darf 8s lang auf die Dateinamens-Bestimmung gewartet werden.
-    if (filenameListenerActive) {
-      filenameTimeoutId = setTimeout(() => {
-        if (filenameListenerActive) {
-          chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
-          filenameListenerActive = false;
-        }
-        resolveFilenameDetermination(false);
-      }, 8000);
-    }
+    const filenameTimeoutId = setTimeout(() => {
+      if (flow.resolveFilenameDetermination) {
+        const resolve = flow.resolveFilenameDetermination;
+        flow.resolveFilenameDetermination = null;
+        resolve(false);
+      }
+    }, 8000);
 
     const filenameApplied = await filenameDeterminedPromise;
-    if (filenameTimeoutId) clearTimeout(filenameTimeoutId);
+    clearTimeout(filenameTimeoutId);
     if (!filenameApplied) {
       return { ok: true, downloadId: item.id, reason: "Download gestartet, aber der Ordner-/Namensvorschlag griff nicht rechtzeitig - Datei liegt vermutlich im Standard-Downloads-Ordner mit Standard-Namen." };
     }
@@ -1517,7 +1851,14 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
   } catch (e) {
     return { ok: false, reason: String(e) };
   } finally {
-    if (removeFilenameListener) removeFilenameListener();
+    if (flow) {
+      activePlinkFormFlows = activePlinkFormFlows.filter((f) => f !== flow);
+      if (flow.resolveFilenameDetermination) {
+        const resolve = flow.resolveFilenameDetermination;
+        flow.resolveFilenameDetermination = null;
+        resolve(false);
+      }
+    }
     if (tab && tab.id) {
       try {
         await chrome.tabs.remove(tab.id);
@@ -1536,6 +1877,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
     case "FIND_IMAGE_FOR_URL":
       fetchAndFindImageGeneric(msg.url).then(sendResponse);
+      return true;
+    case "FIND_IMAGE_FOR_WBC_DLIBRA":
+      findImageFromWbcDlibra(msg.payload || {}).then(sendResponse);
       return true;
     case "FIND_IMAGE_FOR_DFG_VIEWER":
       fetchImageFromDfgViewerLink(msg.url).then(sendResponse);

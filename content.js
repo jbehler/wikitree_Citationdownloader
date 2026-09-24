@@ -48,12 +48,14 @@
   // weil eine explizite Zugangssperre (CAPTCHA, Login, "secured publication")
   // vorliegt - anders als bei einfach nur "noch nicht unterstützt", ist das
   // hier eine bewusste Entscheidung, keine technische Absicherung zu
-  // umgehen. Geprüft am Beispiel: wbc.poznan.pl zeigt bei manchen
-  // Publikationen "Secured publication" / reCAPTCHA-Hinweise.
-  const PROTECTED_NO_AUTOMATION = {
-    "www.wbc.poznan.pl": "Diese Publikation ist bei wbc.poznan.pl teils durch reCAPTCHA/Zugangsprüfung geschützt (\"Secured publication\"). Das wird bewusst nicht automatisiert umgangen - bitte manuell im Browser öffnen und herunterladen.",
-    "wbc.poznan.pl": "Diese Publikation ist bei wbc.poznan.pl teils durch reCAPTCHA/Zugangsprüfung geschützt (\"Secured publication\"). Das wird bewusst nicht automatisiert umgangen - bitte manuell im Browser öffnen und herunterladen."
-  };
+  // umgehen.
+  // Seit 0.17.0 gilt wbc.poznan.pl NICHT mehr pauschal als geschützt:
+  // dLibra nennt die Zugänglichkeit pro Objekt im METS
+  // (dlibra_avs:PublicAccess). Öffentliche Publikationen werden normal
+  // verarbeitet; nicht-öffentliche meldet der Resolver ehrlich (siehe
+  // background.js, Weg 3). Serverseitige Browser-Prüfungen (PoW-Challenge)
+  // werden ebenfalls erkannt und gemeldet, nicht umgangen.
+  const PROTECTED_NO_AUTOMATION = {};
 
   function getMetsHostFromDfgUrl(url) {
     try {
@@ -105,6 +107,13 @@
     if (source.domain === "landesarchiv-bw-plink") {
       return { name: "Landesarchiv Baden-Württemberg", citationLicenseNote: null };
     }
+    if (source.domain === "wbc-dlibra") {
+      // Wielkopolska Digital Library (dLibra). Konkrete Titel-/Rechteangaben
+      // kommen seit 0.17.0 dynamisch aus den METS-Daten (imageInfo.label,
+      // imageInfo.rightsHolder) - hier nur der Institutionsname. Eine
+      // Lizenz wird bewusst NICHT behauptet (nicht verifiziert).
+      return { name: "Wielkopolska Digital Library (Poznań)", citationLicenseNote: null };
+    }
     if (source.domain === "sonstige-quelle") {
       let host = null;
       try {
@@ -128,6 +137,19 @@
     if (/landesarchiv-nrw\.de/i.test(href)) return "landesarchiv-nrw-direkt";
     if (/arcinsys\./i.test(href)) return "arcinsys-direkt";
     if (/landesarchiv-bw\.de/i.test(href)) return "landesarchiv-bw-plink";
+    // dLibra (wbc.poznan.pl, Wielkopolska Digital Library, DInGO 6.x; seit
+    // 0.17.0 automatisiert per METS über OAI statt pauschal als "geschützt"
+    // abzulehnen - siehe background.js, Weg 3):
+    // /dlibra/publication/.../edition/.../content sowie direkte
+    // Datei-/Download-URLs /Content/<id>/...
+    try {
+      const u = new URL(href);
+      if (/(^|\.)wbc\.poznan\.pl$/i.test(u.hostname)) {
+        if (/\/dlibra\//i.test(u.pathname) || /\/Content\/\d+/i.test(u.pathname)) return "wbc-dlibra";
+      }
+    } catch (e) {
+      /* keine gültige URL -> unten "sonstige-quelle" */
+    }
     return "sonstige-quelle";
   }
 
@@ -186,35 +208,110 @@
     return results;
   }
 
+  // ---------------------------------------------------------------------
+  // Seitenangabe im Zitat: Dokumentenseite vs. Beschreibungs-Hinweis
+  // ---------------------------------------------------------------------
+  // Je nach Quelltyp kennt die Extension zwei mögliche Seitenzahlen:
+  //  a) den Seitenzahl-Hinweis aus der Quellenbeschreibung ("S. 12" im
+  //     Textumfeld des Links, citedPageHint - reine Orientierung; er kann
+  //     sich auf eine bedruckte Seite beziehen, die im Digitalisat so
+  //     nicht existiert), und
+  //  b) die tatsächlich ermittelte Dokumentenseite des Digitalisats
+  //     (gewählte Seite bei dLibra, "Bild 74" bei Landesarchiv BW,
+  //     aktiver Seiten-Link bei Matricula, tx_dlf[page] bei METS/DFG).
+  // Regel: Beide anzeigen, wenn sie abweichen - z.B.
+  // "(Seite 12, im Dokument Bild 74)". Stimmen sie überein, genügt
+  // "(Seite N)" - der Hinweis ist dann durch das Digitalisat bestätigt.
+  // Ist nur eine Angabe bekannt, wird nur diese gezeigt; ein alleiniger
+  // Beschreibungs-Hinweis bleibt ausdrücklich als Vermutung gekennzeichnet.
+  function citationDocPage(imageInfo) {
+    if (!imageInfo || !imageInfo.ok || imageInfo.pageNumber == null) return null;
+    // Formular-Download-Stub (Landesarchiv BW): pageNumber ist dort nur
+    // der Beschreibungs-Hinweis als Zahl, keine verifizierte Angabe des
+    // Digitalisats - zählt daher nicht als ermittelte Dokumentenseite.
+    if (imageInfo.via === "form-download-pending") return null;
+    if (imageInfo.via === "bw-bild-php") {
+      // Landesarchiv BW: "Bild N" ist die Position im Digitalisat
+      // (Zählung des Betrachters), nicht die bedruckte Seite - im Zitat
+      // deshalb klar als Dokumentangabe gekennzeichnet (auch als
+      // Einzelangabe, weil "Bild 74" ohne Kontext missverständlich wäre).
+      const docLabel = imageInfo.pageLabel || `Bild ${imageInfo.pageNumber}`;
+      return {
+        number: imageInfo.pageNumber,
+        docLabel,
+        docOnlyLabel: `im Dokument ${docLabel}`
+      };
+    }
+    // dLibra/METS/Matricula: Die ermittelte Zahl ist tatsächlich eine
+    // Seite des Dokuments, darf also als "(Seite N)" allein stehen. Im
+    // Kombinationsfall mit abweichendem Hinweis wird sie zur
+    // Unterscheidung mit "im Dokument" markiert.
+    return {
+      number: imageInfo.pageNumber,
+      docLabel: `Seite ${imageInfo.pageNumber}`,
+      docOnlyLabel: `Seite ${imageInfo.pageNumber}`
+    };
+  }
+
+  function buildCitationPageSuffix(docPage, citedPageHint) {
+    if (docPage) {
+      if (citedPageHint) {
+        // Abweichung: Hinweis (z.B. bedruckte Seite) und tatsächlich
+        // ermittelte Dokumentenseite sind verschieden - beide angeben.
+        // Ohne vergleichbare Zahl (Label nicht als "Bild N" geparst)
+        // lieber beide zeigen als etwas wegzulassen.
+        const differs =
+          docPage.number == null || Number(citedPageHint) !== docPage.number;
+        return differs
+          ? ` (Seite ${citedPageHint}, im Dokument ${docPage.docLabel})`
+          : ` (Seite ${citedPageHint})`;
+      }
+      return ` (${docPage.docOnlyLabel})`;
+    }
+    if (citedPageHint) return ` (vermutlich Seite ${citedPageHint})`;
+    return "";
+  }
+
   function buildCitationText(source, imageInfo) {
     let citation;
     if (source.domain === "matricula") {
+      const pageSuffix = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
       citation =
-        `* Digitalisat: [${source.url} Matricula Online] – ` +
+        `* Digitalisat: [${source.url} Matricula Online${pageSuffix}] – ` +
         `Kirchenbuch-Digitalisat. Lizenz: [https://creativecommons.org/licenses/by-nc-nd/2.0/deed.de CC BY-NC-ND 2.0] ` +
         `(nicht-kommerziell, unverändert, mit Namensnennung). Laut Matricula-Nutzungsbedingungen bitte das ` +
         `zuständige Diözesan-/Landesarchiv über die Online-Veröffentlichung informieren; ein Link genügt dafür.`;
     } else if (source.domain === "dfg-viewer" || source.domain === "landesarchiv-nrw-direkt") {
       const info = institutionInfoForSource(source);
       const viaSuffix = source.domain === "dfg-viewer" ? ", via DFG-Viewer" : "";
+      const pageSuffix = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
       if (info.citationLicenseNote) {
-        citation = `* Digitalisat: [${source.url} ${info.name}${viaSuffix}] – ${info.citationLicenseNote}`;
+        citation = `* Digitalisat: [${source.url} ${info.name}${viaSuffix}${pageSuffix}] – ${info.citationLicenseNote}`;
       } else {
         citation =
-          `* Digitalisat: [${source.url} ${info.name}${viaSuffix}] – ` +
+          `* Digitalisat: [${source.url} ${info.name}${viaSuffix}${pageSuffix}] – ` +
           `Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung ` +
           `direkt bei ${info.name} nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.`;
       }
     } else if (source.domain === "arcinsys-direkt") {
       const info = institutionInfoForSource(source);
-      const pageHint = source.citedPageHint ? ` (vermutlich Seite ${source.citedPageHint})` : "";
+      // Wenn die Extension über den gefundenen DFG-Viewer-Link bereits ein
+      // Bild (METS-Logik) ermittelt hat, ist die Dokumentenseite bekannt und
+      // der "bitte selbst navigieren"-Hinweis wäre falsch.
+      const docPage = citationDocPage(imageInfo);
+      const pageHint = buildCitationPageSuffix(docPage, source.citedPageHint);
+      const navigation = docPage
+        ? "Bild wurde über den auf der Seite gefundenen DFG-Viewer-Link ermittelt (METS-Logik)."
+        : "Link verweist auf das Gesamtdokument, bitte im Dokument selbst zur passenden Seite navigieren.";
       citation =
-        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – Link verweist auf das Gesamtdokument, ` +
-        `bitte im Dokument selbst zur passenden Seite navigieren. Lizenz-/Nutzungsbedingungen nicht bekannt ` +
+        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${navigation} Lizenz-/Nutzungsbedingungen nicht bekannt ` +
         `(nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei ${info.name} nachsehen.`;
     } else if (source.domain === "landesarchiv-bw-plink") {
       const info = institutionInfoForSource(source);
-      const pageHint = source.citedPageHint ? ` (Seite ${source.citedPageHint})` : "";
+      // Seitenangabe: Die ermittelte Dokumentenseite ("Bild N" der
+      // Digitalisat-Seite) hat Vorrang; weicht der Beschreibungs-Hinweis
+      // davon ab, stehen beide im Zitat (s. Helper-Kommentar oben).
+      const pageHint = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
       const deadLink =
         imageInfo && !imageInfo.ok && /antwortet leer/.test(imageInfo.reason || "");
       const direct = deadLink
@@ -231,9 +328,30 @@
             `direkt bei ${info.name} nachsehen.`;
       citation =
         `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${direct}${rightsNote}`;
+    } else if (source.domain === "wbc-dlibra") {
+      const info = institutionInfoForSource(source);
+      const title = imageInfo && imageInfo.label ? cleanLabel(imageInfo.label) : null;
+      // Über den gemeinsamen Helper (gleiche Regel wie bei den anderen
+      // Quelltypen). Für dLibra ändert sich das Ergebnis praktisch nicht:
+      // Die gewählte Seite IST der Beschreibungs-Hinweis, wenn einer
+      // vorhanden war, sonst gab es ihn eben nicht.
+      const page = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
+      const rights = imageInfo && imageInfo.rightsHolder ? ` Rechteangabe des Objekts: ${imageInfo.rightsHolder}.` : "";
+      const djvuNote =
+        imageInfo && imageInfo.previewUnavailable
+          ? ` Die zitierte Seite liegt als DjVu-Datei vor (kein direkt anzeigbares Bildformat) - Download über den Panel-Link, danach selbst konvertieren und hochladen.`
+          : "";
+      citation =
+        `* Digitalisat: [${source.url} ${info.name}${page}] – ` +
+        (title ? `${title}. ` : "") +
+        `Digitalisat über ${info.name} (dLibra-Digitalbibliothek).${rights}${djvuNote} ` +
+        `Lizenz-/Nutzungsbedingungen nicht automatisch geprüft; bitte vor einer Veröffentlichung direkt bei ${info.name} bzw. der im Objekt genannten Einrichtung nachsehen.`;
     } else if (source.domain === "sonstige-quelle") {
       const info = institutionInfoForSource(source);
-      const pageHint = source.citedPageHint ? ` (vermutlich Seite ${source.citedPageHint})` : "";
+      // Für unbekannte Systeme gibt es bisher keine ermittelte
+      // Dokumentenseite - der Helper liefert daher nur den ehrlichen
+      // "vermutlich"-Hinweis (oder nichts).
+      const pageHint = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
       const reason = info.protectedReason
         ? info.protectedReason
         : "Automatischer Bildabruf für diese Quelle ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen.";
@@ -291,8 +409,9 @@
     if (imageInfo && imageInfo.via === "canvas-snapshot") return "png";
     if (imageInfo && imageInfo.via === "bw-bild-php") return "jpg"; // bild.php-URL endet nicht auf .jpg
     const url = (imageInfo && imageInfo.imageUrl) || "";
-    const m = /\.(jpe?g|png|webp|tiff?)(?:[?#]|$)/i.exec(url);
+    const m = /\.(jpe?g|png|webp|tiff?|djvu)(?:[?#]|$)/i.exec(url);
     if (m) return m[1].toLowerCase().replace("jpeg", "jpg");
+    if (imageInfo && imageInfo.via === "dlibra-djvu") return "djvu"; // URLs ohne erkennbare Endung
     return "jpg"; // plausibler Standard für Archiv-/Kirchenbuch-Scans
   }
 
@@ -354,9 +473,22 @@
       const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
       return { ok: true, via: "form-download-pending", label: "Landesarchiv Baden-Württemberg", pageNumber };
     }
+    if (source.domain === "wbc-dlibra") {
+      // dLibra: METS-Datei der Edition über den OAI-Endpunkt auswerten
+      // (Titel, Seiten, Rechte; PublicAccess-Prüfung gegen Sperren). Die
+      // Seitenzahl kommt aus der Quellenbeschreibung, falls vorhanden.
+      return chrome.runtime.sendMessage({
+        type: "FIND_IMAGE_FOR_WBC_DLIBRA",
+        payload: {
+          url: source.url,
+          pageNumber: source.citedPageHint ? parseInt(source.citedPageHint, 10) : null,
+        },
+      });
+    }
     if (source.domain === "sonstige-quelle") {
-      // Unbekanntes System (z.B. dLibra, ein anderes Landesarchiv-System
-      // usw.) - kein Fetch-Versuch, da weder host_permissions noch eine
+      // Unbekanntes System (z.B. ein anderes Landesarchiv-System, ein
+      // Bibliothekskatalog o.ä.; dLibra wird seit 0.17.0 unterstützt) -
+      // kein Fetch-Versuch, da weder host_permissions noch eine
       // passende Extraktionslogik dafür existieren. Lieber ehrlich sofort
       // sagen, dass das (noch) nicht unterstützt wird, statt einen
       // sicher fehlschlagenden Netzwerk-Versuch zu starten.
@@ -510,6 +642,9 @@
       return `${info.name} (Gesamtdokument)`;
     }
     if (source.domain === "landesarchiv-bw-plink") {
+      return institutionInfoForSource(source).name;
+    }
+    if (source.domain === "wbc-dlibra") {
       return institutionInfoForSource(source).name;
     }
     if (source.domain === "sonstige-quelle") {
@@ -669,6 +804,10 @@
         const viaLabel =
           info.via === "mets"
             ? "über METS-Datei"
+            : info.via === "dlibra-oai-mets"
+            ? "über dLibra-METS (OAI)"
+            : info.via === "dlibra-djvu"
+            ? "über dLibra-METS (OAI)"
             : info.via === "dv1-html"
             ? "direkt aus Matricula-Seite (Original-JPEG)"
             : info.via === "bw-bild-php"
@@ -678,20 +817,26 @@
             : info.via === "canvas-snapshot"
             ? "Canvas-Schnappschuss"
             : "Heuristik, experimentell";
-        statusEl.textContent = `Bild gefunden (${viaLabel})`;
-        const img = document.createElement("img");
-        img.src = info.imageUrl;
-        img.className = "qba-thumb";
-        img.addEventListener("error", () => {
-          // z.B. gesperrte Seite ("aus gesetzlichen Gründen gesperrt")
-          // oder Server-Problem - der Download-Link kann trotzdem greifen
-          const note = document.createElement("div");
-          note.className = "qba-caveat";
-          note.textContent =
-            "⚠ Vorschau konnte nicht geladen werden (evtl. gesperrte Seite oder Server-Problem) - Download-Link unten kann trotzdem funktionieren.";
-          previewEl.insertBefore(note, img.nextSibling);
-        });
-        previewEl.appendChild(img);
+        if (info.previewUnavailable) {
+          // z.B. dLibra-DjVu-Seiten: kein <img>-fähiges Format. Statt eines
+          // kaputten Bilds ehrlich erklären und nur den Download anbieten.
+          statusEl.textContent = `Quelle geprüft (${viaLabel}) – Bildvorschau hier nicht möglich`;
+        } else {
+          statusEl.textContent = `Bild gefunden (${viaLabel})`;
+          const img = document.createElement("img");
+          img.src = info.imageUrl;
+          img.className = "qba-thumb";
+          img.addEventListener("error", () => {
+            // z.B. gesperrte Seite ("aus gesetzlichen Gründen gesperrt")
+            // oder Server-Problem - der Download-Link kann trotzdem greifen
+            const note = document.createElement("div");
+            note.className = "qba-caveat";
+            note.textContent =
+              "⚠ Vorschau konnte nicht geladen werden (evtl. gesperrte Seite oder Server-Problem) - Download-Link unten kann trotzdem funktionieren.";
+            previewEl.insertBefore(note, img.nextSibling);
+          });
+          previewEl.appendChild(img);
+        }
 
         if (info.caveat) {
           const note = document.createElement("div");

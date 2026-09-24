@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "WikiTree Quellenbilder-Assistent",
-  "version": "0.16.1",
-  "description": "Findet matricula-online.eu- und DFG-Viewer/Landesarchiv-NRW-Links in einem geöffneten WikiTree-Profil und hilft, korrekte Quellenangaben (und wenn möglich eine Bildvorschau) in den Bio-Editor einzufügen.",
+  "version": "0.17.1",
+  "description": "Findet Quellen-Links (Matricula, DFG-Viewer/Landesarchiv NRW, Landesarchiv BW, Arcinsys, Wielkopolska Digital Library/dLibra u.a.) in einem geöffneten WikiTree-Profil und hilft, korrekte Quellenangaben (und wenn möglich eine Bildvorschau) in den Bio-Editor einzufügen.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -21,7 +21,9 @@
     "https://*.arcinsys.de/*",
     "http://*.arcinsys.de/*",
     "https://*.landesarchiv-bw.de/*",
-    "http://*.landesarchiv-bw.de/*"
+    "http://*.landesarchiv-bw.de/*",
+    "https://*.wbc.poznan.pl/*",
+    "https://wbc.poznan.pl/*"
   ],
   "background": {
     "service_worker": "background.js"
