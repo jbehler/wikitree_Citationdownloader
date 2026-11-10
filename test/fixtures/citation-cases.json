@@ -1,0 +1,23 @@
+[
+  {"name": "matricula ohne Info", "source": {"url": "https://data.matricula-online.eu/de/deutschland/aachen/aachen-hl-kreuz/KB+001/?pg=3", "domain": "matricula", "citedPageHint": null}, "imageInfo": null},
+  {"name": "matricula mit Seitenzahl", "source": {"url": "https://data.matricula-online.eu/de/deutschland/aachen/aachen-hl-kreuz/KB+001/?pg=3", "domain": "matricula", "citedPageHint": "197"}, "imageInfo": {"ok": true, "via": "matricula-dv1", "pageNumber": 197}},
+  {"name": "matricula Hinweis gleich Seite", "source": {"url": "https://data.matricula-online.eu/x/?pg=1", "domain": "matricula", "citedPageHint": "197"}, "imageInfo": {"ok": true, "pageNumber": 197}},
+  {"name": "matricula nur Hinweis", "source": {"url": "https://data.matricula-online.eu/x/?pg=1", "domain": "matricula", "citedPageHint": "12"}, "imageInfo": {"ok": false, "reason": "x"}},
+  {"name": "dfg-viewer bekanntes Archiv unbekannt", "source": {"url": "https://dfg-viewer.de/show?tx_dlf[id]=https%3A%2F%2Fexample-archiv.de%2Fmets.xml&tx_dlf[page]=5", "domain": "dfg-viewer", "citedPageHint": null}, "imageInfo": {"ok": true, "via": "mets", "pageNumber": 5}},
+  {"name": "dfg-viewer Landesarchiv NRW", "source": {"url": "https://dfg-viewer.de/show?tx_dlf[id]=https%3A%2F%2Fwww.landesarchiv-nrw.de%2Fmets.xml&tx_dlf[page]=5", "domain": "dfg-viewer", "citedPageHint": "7"}, "imageInfo": {"ok": true, "via": "mets", "pageNumber": 5}},
+  {"name": "dfg-viewer ohne METS-Host", "source": {"url": "https://dfg-viewer.de/show", "domain": "dfg-viewer", "citedPageHint": null}, "imageInfo": null},
+  {"name": "landesarchiv-nrw-direkt", "source": {"url": "https://www.landesarchiv-nrw.de/viewer/x", "domain": "landesarchiv-nrw-direkt", "citedPageHint": "3"}, "imageInfo": {"ok": true, "via": "mets", "pageNumber": 3}},
+  {"name": "arcinsys ohne Bild", "source": {"url": "https://arcinsys.hessen.de/arcinsys/detailAction?detailid=v1", "domain": "arcinsys-direkt", "citedPageHint": "4"}, "imageInfo": {"ok": false, "reason": "x"}},
+  {"name": "arcinsys mit Bild", "source": {"url": "https://www.arcinsys.niedersachsen.de/arcinsys/x", "domain": "arcinsys-direkt", "citedPageHint": null}, "imageInfo": {"ok": true, "via": "mets", "pageNumber": 2}},
+  {"name": "bw bild-php mit Rechten Hinweis abweichend", "source": {"url": "https://www.landesarchiv-bw.de/plink/?f=1-456", "domain": "landesarchiv-bw-plink", "citedPageHint": "12"}, "imageInfo": {"ok": true, "via": "bw-bild-php", "pageNumber": 74, "pageLabel": "Bild 74", "rightsCategory": "UND"}},
+  {"name": "bw bild-php nur Dokumentseite", "source": {"url": "https://www.landesarchiv-bw.de/plink/?f=1-456", "domain": "landesarchiv-bw-plink", "citedPageHint": null}, "imageInfo": {"ok": true, "via": "bw-bild-php", "pageNumber": 74, "pageLabel": "Bild 74", "rightsCategory": "UND"}},
+  {"name": "bw bild-php Hinweis gleich", "source": {"url": "https://www.landesarchiv-bw.de/plink/?f=1-456", "domain": "landesarchiv-bw-plink", "citedPageHint": "74"}, "imageInfo": {"ok": true, "via": "bw-bild-php", "pageNumber": 74, "rightsCategory": null}},
+  {"name": "bw Formular-Download", "source": {"url": "https://www.landesarchiv-bw.de/plink/?f=1-456", "domain": "landesarchiv-bw-plink", "citedPageHint": "5"}, "imageInfo": {"ok": true, "via": "form-download-pending", "pageNumber": 5}},
+  {"name": "bw toter Link", "source": {"url": "https://www.landesarchiv-bw.de/plink/?i=1", "domain": "landesarchiv-bw-plink", "citedPageHint": null}, "imageInfo": {"ok": false, "reason": "Server antwortet leer"}},
+  {"name": "bw ohne Info", "source": {"url": "https://www.landesarchiv-bw.de/plink/?f=1-2", "domain": "landesarchiv-bw-plink", "citedPageHint": null}, "imageInfo": null},
+  {"name": "dlibra mit allem", "source": {"url": "https://www.wbc.poznan.pl/dlibra/publication/147448/edition/156210/content", "domain": "wbc-dlibra", "citedPageHint": "8"}, "imageInfo": {"ok": true, "via": "dlibra-djvu", "pageNumber": 8, "label": "Księga | Matricula Online", "rightsHolder": "Biblioteka Raczyńskich", "previewUnavailable": true}},
+  {"name": "dlibra minimal", "source": {"url": "https://www.wbc.poznan.pl/dlibra/publication/1/edition/2/content", "domain": "wbc-dlibra", "citedPageHint": null}, "imageInfo": null},
+  {"name": "sonstige bekannt", "source": {"url": "https://wbc.poznan.pl/foo", "domain": "sonstige-quelle", "citedPageHint": "3"}, "imageInfo": {"ok": false}},
+  {"name": "sonstige unbekannt", "source": {"url": "https://www.example-bibliothek.co.uk/item/1", "domain": "sonstige-quelle", "citedPageHint": null}, "imageInfo": null},
+  {"name": "unbekannte domain", "source": {"url": "https://example.org/x", "domain": "gibt-es-nicht", "citedPageHint": null}, "imageInfo": null}
+]

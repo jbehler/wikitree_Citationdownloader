@@ -78,70 +78,17 @@
     return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ") || null;
   }
 
-  function institutionInfoForSource(source) {
-    if (source.domain === "dfg-viewer") {
-      const host = getMetsHostFromDfgUrl(source.url);
-      const known = host && KNOWN_INSTITUTIONS[host];
-      return {
-        name: (known && known.name) || humanizeHost(host) || "unbekanntes Archiv",
-        citationLicenseNote: known ? known.citationLicenseNote : null
-      };
-    }
-    if (source.domain === "landesarchiv-nrw-direkt") {
-      const known = KNOWN_INSTITUTIONS["landesarchiv-nrw.de"];
-      return { name: known.name, citationLicenseNote: known.citationLicenseNote };
-    }
-    if (source.domain === "arcinsys-direkt") {
-      let host = null;
-      try {
-        host = new URL(source.url).hostname;
-      } catch (e) {
-        /* ignorieren */
-      }
-      const known = host && KNOWN_INSTITUTIONS[host];
-      return {
-        name: (known && known.name) || humanizeHost(host) || "Arcinsys",
-        citationLicenseNote: known ? known.citationLicenseNote : null
-      };
-    }
-    if (source.domain === "landesarchiv-bw-plink") {
-      return { name: "Landesarchiv Baden-Württemberg", citationLicenseNote: null };
-    }
-    if (source.domain === "wbc-dlibra") {
-      // Wielkopolska Digital Library (dLibra). Konkrete Titel-/Rechteangaben
-      // kommen seit 0.17.0 dynamisch aus den METS-Daten (imageInfo.label,
-      // imageInfo.rightsHolder) - hier nur der Institutionsname. Eine
-      // Lizenz wird bewusst NICHT behauptet (nicht verifiziert).
-      return { name: "Wielkopolska Digital Library (Poznań)", citationLicenseNote: null };
-    }
-    if (source.domain === "sonstige-quelle") {
-      let host = null;
-      try {
-        host = new URL(source.url).hostname;
-      } catch (e) {
-        /* ignorieren */
-      }
-      const known = host && KNOWN_INSTITUTIONS[host];
-      return {
-        name: (known && known.name) || humanizeHost(host) || "unbekannte Quelle",
-        citationLicenseNote: known ? known.citationLicenseNote : null,
-        protectedReason: host ? PROTECTED_NO_AUTOMATION[host] : null
-      };
-    }
-    return null;
+  // Defensive Allowlist (Gegenstück zu background.js sanitizeFindResult):
+  // nur http(s) und data:image/ in img.src bzw. a.href übernehmen.
+  function isSafeUrl(url, allowDataImage) {
+    if (typeof url !== "string" || !url) return false;
+    if (allowDataImage && /^data:image\/(?:png|jpe?g|gif|webp)[;,]/i.test(url)) return true;
+    return /^https?:\/\//i.test(url);
   }
 
   // Klassifiziert nach HOSTNAME, nicht per Regex über die ganze URL: sonst
   // würde z.B. https://example.com/?ref=matricula-online.eu als Matricula
   // erkannt. Suffix-Match auf Label-Grenze ((^|\.)host$).
-  // Defensive Allowlist (Gegenstück zu background.js sanitizeFindResult):
-  // nur http(s) und data:image/ in img.src bzw. a.href übernehmen.
-  function isSafeUrl(url, allowDataImage) {
-    if (typeof url !== "string" || !url) return false;
-    if (allowDataImage && /^data:image\//i.test(url)) return true;
-    return /^https?:\/\//i.test(url);
-  }
-
   function classifyDomain(href) {
     let u = null;
     try {
@@ -288,99 +235,320 @@
     return "";
   }
 
-  function buildCitationText(source, imageInfo) {
-    let citation;
-    if (source.domain === "matricula") {
-      const pageSuffix = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
-      citation =
-        `* Digitalisat: [${source.url} Matricula Online${pageSuffix}] – ` +
-        `Kirchenbuch-Digitalisat. Lizenz: [https://creativecommons.org/licenses/by-nc-nd/2.0/deed.de CC BY-NC-ND 2.0] ` +
-        `(nicht-kommerziell, unverändert, mit Namensnennung). Laut Matricula-Nutzungsbedingungen bitte das ` +
-        `zuständige Diözesan-/Landesarchiv über die Online-Veröffentlichung informieren; ein Link genügt dafür.`;
-    } else if (source.domain === "dfg-viewer" || source.domain === "landesarchiv-nrw-direkt") {
-      const info = institutionInfoForSource(source);
-      const viaSuffix = source.domain === "dfg-viewer" ? ", via DFG-Viewer" : "";
-      const pageSuffix = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
-      if (info.citationLicenseNote) {
-        citation = `* Digitalisat: [${source.url} ${info.name}${viaSuffix}${pageSuffix}] – ${info.citationLicenseNote}`;
-      } else {
-        citation =
-          `* Digitalisat: [${source.url} ${info.name}${viaSuffix}${pageSuffix}] – ` +
-          `Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung ` +
-          `direkt bei ${info.name} nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.`;
+  // ---------------------------------------------------------------------
+  // Quelltyp-Registry
+  // ---------------------------------------------------------------------
+  // Pro source.domain (Ergebnis von classifyDomain) gibt es genau einen
+  // Eintrag mit allem, was sich je Quelltyp unterscheidet - vorher waren
+  // das vier verstreute if/else-Ketten (institutionInfoForSource,
+  // domainLabel, requestImageInfo, buildCitationText), bei denen ein neuer
+  // Quelltyp an vier Stellen ergänzt werden musste:
+  //   label(source)                  -> Kurzname fürs Panel/Dateinamen
+  //   institution(source)            -> { name, citationLicenseNote, … }
+  //                                     (fehlt = null, z.B. Matricula)
+  //   requestImageInfo(source)       -> Promise mit dem Bild-Ergebnis
+  //   buildCitation(source, imgInfo) -> Zitattext (String)
+  // Unbekannte domain-Werte fallen in den Dispatch-Funktionen weiter unten
+  // auf die bisherigen Fallbacks zurück.
+
+  // Gemeinsame Zitat-Logik von DFG-Viewer-Links und direkten Landesarchiv-
+  // NRW-Links (nur der "via DFG-Viewer"-Zusatz unterscheidet sich).
+  function buildMetsCitation(source, imageInfo) {
+    const info = institutionInfoForSource(source);
+    const viaSuffix = source.domain === "dfg-viewer" ? ", via DFG-Viewer" : "";
+    const pageSuffix = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
+    if (info.citationLicenseNote) {
+      return `* Digitalisat: [${source.url} ${info.name}${viaSuffix}${pageSuffix}] – ${info.citationLicenseNote}`;
+    }
+    return (
+      `* Digitalisat: [${source.url} ${info.name}${viaSuffix}${pageSuffix}] – ` +
+      `Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung ` +
+      `direkt bei ${info.name} nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.`
+    );
+  }
+
+  function hostnameOf(url) {
+    try {
+      return new URL(url).hostname;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const SOURCE_TYPES = {
+    "matricula": {
+      label() {
+        return "Matricula";
+      },
+      // bewusst keine institution(): Matricula hat keine Institutions-Info
+      async requestImageInfo(source) {
+        // Erst die günstige Methode (einfacher HTML-Abruf, jetzt mit
+        // gelockertem Filter für Kitodo-typische <img>-Tags ohne
+        // erkennbare Dateiendung). Nur wenn das nichts findet, der
+        // aufwändigere Hidden-Tab-Versuch (inkl. Canvas-Snapshot) als
+        // Fallback.
+        const quick = await chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_URL", url: source.url });
+        if (quick && quick.ok) return quick;
+        return chrome.runtime.sendMessage({ type: "FIND_IMAGE_VIA_HIDDEN_TAB", url: source.url });
+      },
+      buildCitation(source, imageInfo) {
+        const pageSuffix = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
+        return (
+          `* Digitalisat: [${source.url} Matricula Online${pageSuffix}] – ` +
+          `Kirchenbuch-Digitalisat. Lizenz: [https://creativecommons.org/licenses/by-nc-nd/2.0/deed.de CC BY-NC-ND 2.0] ` +
+          `(nicht-kommerziell, unverändert, mit Namensnennung). Laut Matricula-Nutzungsbedingungen bitte das ` +
+          `zuständige Diözesan-/Landesarchiv über die Online-Veröffentlichung informieren; ein Link genügt dafür.`
+        );
       }
-    } else if (source.domain === "arcinsys-direkt") {
-      const info = institutionInfoForSource(source);
-      // Wenn die Extension über den gefundenen DFG-Viewer-Link bereits ein
-      // Bild (METS-Logik) ermittelt hat, ist die Dokumentenseite bekannt und
-      // der "bitte selbst navigieren"-Hinweis wäre falsch.
-      const docPage = citationDocPage(imageInfo);
-      const pageHint = buildCitationPageSuffix(docPage, source.citedPageHint);
-      const navigation = docPage
-        ? "Bild wurde über den auf der Seite gefundenen DFG-Viewer-Link ermittelt (METS-Logik)."
-        : "Link verweist auf das Gesamtdokument, bitte im Dokument selbst zur passenden Seite navigieren.";
-      citation =
-        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${navigation} Lizenz-/Nutzungsbedingungen nicht bekannt ` +
-        `(nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei ${info.name} nachsehen.`;
-    } else if (source.domain === "landesarchiv-bw-plink") {
-      const info = institutionInfoForSource(source);
-      // Seitenangabe: Die ermittelte Dokumentenseite ("Bild N" der
-      // Digitalisat-Seite) hat Vorrang; weicht der Beschreibungs-Hinweis
-      // davon ab, stehen beide im Zitat (s. Helper-Kommentar oben).
-      const pageHint = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
-      const deadLink =
-        imageInfo && !imageInfo.ok && /antwortet leer/.test(imageInfo.reason || "");
-      const direct = deadLink
-        ? "Link veraltet: das plink-Format mit ?i=<id> wird von Landesarchiv BW nicht mehr aufgelöst (Link liefert eine leere Seite) - das plink-Format ?f=<archiv>-<bestand>-<bild> funktioniert noch; bitte den Quellen-Link aktualisieren; Bilddownload nicht möglich."
-        : imageInfo && imageInfo.ok && imageInfo.via === "bw-bild-php"
-        ? "Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt)."
-        : "Bilddownload über ein Formular auf der Seite.";
-      const rightsNote =
-        imageInfo && imageInfo.rightsCategory
-          ? ` Auf der Digitalisat-Seite ist die Rechtekategorie ${imageInfo.rightsCategory} gemäß ` +
-            `rightsstatements.org ausgewählt (bei UND: Rechte unbestimmt) - bitte vor einer Veröffentlichung ` +
-            `trotzdem die Nutzungsbedingungen bei ${info.name} prüfen.`
-          : ` Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
-            `direkt bei ${info.name} nachsehen.`;
-      citation =
-        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${direct}${rightsNote}`;
-    } else if (source.domain === "wbc-dlibra") {
-      const info = institutionInfoForSource(source);
-      const title = imageInfo && imageInfo.label ? cleanLabel(imageInfo.label) : null;
-      // Über den gemeinsamen Helper (gleiche Regel wie bei den anderen
-      // Quelltypen). Für dLibra ändert sich das Ergebnis praktisch nicht:
-      // Die gewählte Seite IST der Beschreibungs-Hinweis, wenn einer
-      // vorhanden war, sonst gab es ihn eben nicht.
-      const page = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
-      const rights = imageInfo && imageInfo.rightsHolder ? ` Rechteangabe des Objekts: ${imageInfo.rightsHolder}.` : "";
-      const djvuNote =
-        imageInfo && imageInfo.previewUnavailable
-          ? ` Die zitierte Seite liegt als DjVu-Datei vor (kein direkt anzeigbares Bildformat) - Download über den Panel-Link, danach selbst konvertieren und hochladen.`
-          : "";
-      citation =
-        `* Digitalisat: [${source.url} ${info.name}${page}] – ` +
-        (title ? `${title}. ` : "") +
-        `Digitalisat über ${info.name} (dLibra-Digitalbibliothek).${rights}${djvuNote} ` +
-        `Lizenz-/Nutzungsbedingungen nicht automatisch geprüft; bitte vor einer Veröffentlichung direkt bei ${info.name} bzw. der im Objekt genannten Einrichtung nachsehen.`;
-    } else if (source.domain === "sonstige-quelle") {
-      const info = institutionInfoForSource(source);
-      // Für unbekannte Systeme gibt es bisher keine ermittelte
-      // Dokumentenseite - der Helper liefert daher nur den ehrlichen
-      // "vermutlich"-Hinweis (oder nichts).
-      const pageHint = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
-      const reason = info.protectedReason
-        ? info.protectedReason
-        : "Automatischer Bildabruf für diese Quelle ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen.";
-      citation =
-        `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${reason} Lizenz-/` +
-        `Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
-        `direkt bei ${info.name} nachsehen.`;
-    } else {
-      citation =
-        `* Digitalisat: [${source.url} unbekanntes Archiv] – ` +
+    },
+
+    "dfg-viewer": {
+      label(source) {
+        return `${institutionInfoForSource(source).name} (DFG-Viewer)`;
+      },
+      institution(source) {
+        const host = getMetsHostFromDfgUrl(source.url);
+        const known = host && KNOWN_INSTITUTIONS[host];
+        return {
+          name: (known && known.name) || humanizeHost(host) || "unbekanntes Archiv",
+          citationLicenseNote: known ? known.citationLicenseNote : null
+        };
+      },
+      requestImageInfo(source) {
+        return chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_DFG_VIEWER", url: source.url });
+      },
+      buildCitation: buildMetsCitation
+    },
+
+    "landesarchiv-nrw-direkt": {
+      label(source) {
+        return institutionInfoForSource(source).name;
+      },
+      institution() {
+        const known = KNOWN_INSTITUTIONS["landesarchiv-nrw.de"];
+        return { name: known.name, citationLicenseNote: known.citationLicenseNote };
+      },
+      requestImageInfo(source) {
+        return chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_DFG_VIEWER", url: source.url });
+      },
+      buildCitation: buildMetsCitation
+    },
+
+    "arcinsys-direkt": {
+      label(source) {
+        return `${institutionInfoForSource(source).name} (Gesamtdokument)`;
+      },
+      institution(source) {
+        const host = hostnameOf(source.url);
+        const known = host && KNOWN_INSTITUTIONS[host];
+        return {
+          name: (known && known.name) || humanizeHost(host) || "Arcinsys",
+          citationLicenseNote: known ? known.citationLicenseNote : null
+        };
+      },
+      async requestImageInfo(source) {
+        const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
+        const result = await chrome.runtime.sendMessage({
+          type: "FIND_DFG_VIEWER_LINK_FROM_ARCINSYS",
+          payload: { url: source.url, pageNumber }
+        });
+        if (result && result.suggestedUrl) {
+          source.suggestedUrl = result.suggestedUrl; // für "Quelle übernehmen"-Button im Panel
+        }
+        if (result && result.ok) {
+          return result; // enthält bereits imageUrl/label/pageNumber über die METS-Logik
+        }
+        const pageHint = pageNumber ? "" : source.citedPageHint ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.` : "";
+        return {
+          ok: false,
+          reason: (result && result.reason) || `Link verweist nur auf das Gesamtdokument, nicht auf eine einzelne Seite.${pageHint}`,
+          suggestedUrl: result && result.suggestedUrl
+        };
+      },
+      buildCitation(source, imageInfo) {
+        const info = institutionInfoForSource(source);
+        // Wenn die Extension über den gefundenen DFG-Viewer-Link bereits ein
+        // Bild (METS-Logik) ermittelt hat, ist die Dokumentenseite bekannt und
+        // der "bitte selbst navigieren"-Hinweis wäre falsch.
+        const docPage = citationDocPage(imageInfo);
+        const pageHint = buildCitationPageSuffix(docPage, source.citedPageHint);
+        const navigation = docPage
+          ? "Bild wurde über den auf der Seite gefundenen DFG-Viewer-Link ermittelt (METS-Logik)."
+          : "Link verweist auf das Gesamtdokument, bitte im Dokument selbst zur passenden Seite navigieren.";
+        return (
+          `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${navigation} Lizenz-/Nutzungsbedingungen nicht bekannt ` +
+          `(nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei ${info.name} nachsehen.`
+        );
+      }
+    },
+
+    "landesarchiv-bw-plink": {
+      label(source) {
+        return institutionInfoForSource(source).name;
+      },
+      institution() {
+        return { name: "Landesarchiv Baden-Württemberg", citationLicenseNote: null };
+      },
+      async requestImageInfo(source) {
+        // Zuerst der direkte Weg: bild_zoom-Seiten rendern die URL des
+        // angezeigten JPEGs (bild.php) ins HTML - Vorschau und Download
+        // ohne Nebenwirkung, wie bei Matricula dv1 (seit 0.16.0). Nur wenn
+        // das nichts liefert, bleibt es beim Formular-Download: Dessen
+        // Formular-Submit ist selbst schon der Download-Trigger, deshalb
+        // darf er erst beim "gemeinsam herunterladen"-Klick passieren -
+        // die reinen Prüfung signalisiert nur, dass diese Quelle so
+        // verarbeitet werden kann.
+        const quick = await chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_URL", url: source.url });
+        if (quick && quick.ok) return quick;
+        if (quick && !quick.ok && /antwortet leer/.test(quick.reason || "")) {
+          // Ehrlich bleiben: toter ?i-Link (das Format ?i=<id> wird nicht mehr aufgelöst - für JEDEN eine leere Seite; das ?f=<archiv>-<bestand>-<bild>-Format funktioniert noch). Grund als Status zeigen statt dem falschen Formular-Download-Versprechen.
+          return quick;
+        }
+        const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
+        return { ok: true, via: "form-download-pending", label: "Landesarchiv Baden-Württemberg", pageNumber };
+      },
+      buildCitation(source, imageInfo) {
+        const info = institutionInfoForSource(source);
+        // Seitenangabe: Die ermittelte Dokumentenseite ("Bild N" der
+        // Digitalisat-Seite) hat Vorrang; weicht der Beschreibungs-Hinweis
+        // davon ab, stehen beide im Zitat (s. Helper-Kommentar oben).
+        const pageHint = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
+        const deadLink =
+          imageInfo && !imageInfo.ok && /antwortet leer/.test(imageInfo.reason || "");
+        const direct = deadLink
+          ? "Link veraltet: das plink-Format mit ?i=<id> wird von Landesarchiv BW nicht mehr aufgelöst (Link liefert eine leere Seite) - das plink-Format ?f=<archiv>-<bestand>-<bild> funktioniert noch; bitte den Quellen-Link aktualisieren; Bilddownload nicht möglich."
+          : imageInfo && imageInfo.ok && imageInfo.via === "bw-bild-php"
+          ? "Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt)."
+          : "Bilddownload über ein Formular auf der Seite.";
+        const rightsNote =
+          imageInfo && imageInfo.rightsCategory
+            ? ` Auf der Digitalisat-Seite ist die Rechtekategorie ${imageInfo.rightsCategory} gemäß ` +
+              `rightsstatements.org ausgewählt (bei UND: Rechte unbestimmt) - bitte vor einer Veröffentlichung ` +
+              `trotzdem die Nutzungsbedingungen bei ${info.name} prüfen.`
+            : ` Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
+              `direkt bei ${info.name} nachsehen.`;
+        return `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${direct}${rightsNote}`;
+      }
+    },
+
+    "wbc-dlibra": {
+      label(source) {
+        return institutionInfoForSource(source).name;
+      },
+      institution() {
+        // Wielkopolska Digital Library (dLibra). Konkrete Titel-/Rechteangaben
+        // kommen seit 0.17.0 dynamisch aus den METS-Daten (imageInfo.label,
+        // imageInfo.rightsHolder) - hier nur der Institutionsname. Eine
+        // Lizenz wird bewusst NICHT behauptet (nicht verifiziert).
+        return { name: "Wielkopolska Digital Library (Poznań)", citationLicenseNote: null };
+      },
+      requestImageInfo(source) {
+        // dLibra: METS-Datei der Edition über den OAI-Endpunkt auswerten
+        // (Titel, Seiten, Rechte; PublicAccess-Prüfung gegen Sperren). Die
+        // Seitenzahl kommt aus der Quellenbeschreibung, falls vorhanden.
+        return chrome.runtime.sendMessage({
+          type: "FIND_IMAGE_FOR_WBC_DLIBRA",
+          payload: {
+            url: source.url,
+            pageNumber: source.citedPageHint ? parseInt(source.citedPageHint, 10) : null,
+          },
+        });
+      },
+      buildCitation(source, imageInfo) {
+        const info = institutionInfoForSource(source);
+        const title = imageInfo && imageInfo.label ? cleanLabel(imageInfo.label) : null;
+        // Über den gemeinsamen Helper (gleiche Regel wie bei den anderen
+        // Quelltypen). Für dLibra ändert sich das Ergebnis praktisch nicht:
+        // Die gewählte Seite IST der Beschreibungs-Hinweis, wenn einer
+        // vorhanden war, sonst gab es ihn eben nicht.
+        const page = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
+        const rights = imageInfo && imageInfo.rightsHolder ? ` Rechteangabe des Objekts: ${imageInfo.rightsHolder}.` : "";
+        const djvuNote =
+          imageInfo && imageInfo.previewUnavailable
+            ? ` Die zitierte Seite liegt als DjVu-Datei vor (kein direkt anzeigbares Bildformat) - Download über den Panel-Link, danach selbst konvertieren und hochladen.`
+            : "";
+        return (
+          `* Digitalisat: [${source.url} ${info.name}${page}] – ` +
+          (title ? `${title}. ` : "") +
+          `Digitalisat über ${info.name} (dLibra-Digitalbibliothek).${rights}${djvuNote} ` +
+          `Lizenz-/Nutzungsbedingungen nicht automatisch geprüft; bitte vor einer Veröffentlichung direkt bei ${info.name} bzw. der im Objekt genannten Einrichtung nachsehen.`
+        );
+      }
+    },
+
+    "sonstige-quelle": {
+      label(source) {
+        return institutionInfoForSource(source).name;
+      },
+      institution(source) {
+        const host = hostnameOf(source.url);
+        const known = host && KNOWN_INSTITUTIONS[host];
+        return {
+          name: (known && known.name) || humanizeHost(host) || "unbekannte Quelle",
+          citationLicenseNote: known ? known.citationLicenseNote : null,
+          protectedReason: host ? PROTECTED_NO_AUTOMATION[host] : null
+        };
+      },
+      async requestImageInfo(source) {
+        // Unbekanntes System (z.B. ein anderes Landesarchiv-System, ein
+        // Bibliothekskatalog o.ä.; dLibra wird seit 0.17.0 unterstützt) -
+        // kein Fetch-Versuch, da weder host_permissions noch eine
+        // passende Extraktionslogik dafür existieren. Lieber ehrlich sofort
+        // sagen, dass das (noch) nicht unterstützt wird, statt einen
+        // sicher fehlschlagenden Netzwerk-Versuch zu starten.
+        const info = institutionInfoForSource(source);
+        const pageHint = source.citedPageHint ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.` : "";
+        return {
+          ok: false,
+          reason: info.protectedReason || `Dieses System wird von der Extension noch nicht unterstützt - bitte manuell öffnen und herunterladen.${pageHint}`
+        };
+      },
+      buildCitation(source, imageInfo) {
+        const info = institutionInfoForSource(source);
+        // Für unbekannte Systeme gibt es bisher keine ermittelte
+        // Dokumentenseite - der Helper liefert daher nur den ehrlichen
+        // "vermutlich"-Hinweis (oder nichts).
+        const pageHint = buildCitationPageSuffix(citationDocPage(imageInfo), source.citedPageHint);
+        const reason = info.protectedReason
+          ? info.protectedReason
+          : "Automatischer Bildabruf für diese Quelle ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen.";
+        return (
+          `* Digitalisat: [${source.url} ${info.name}${pageHint}] – ${reason} Lizenz-/` +
+          `Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung ` +
+          `direkt bei ${info.name} nachsehen.`
+        );
+      }
+    }
+  };
+
+  function getSourceType(source) {
+    const domain = source && source.domain;
+    return Object.prototype.hasOwnProperty.call(SOURCE_TYPES, domain) ? SOURCE_TYPES[domain] : null;
+  }
+
+  function institutionInfoForSource(source) {
+    const type = getSourceType(source);
+    return type && type.institution ? type.institution(source) : null;
+  }
+
+  function domainLabel(source) {
+    const type = getSourceType(source);
+    return type ? type.label(source) : "Quelle";
+  }
+
+  async function requestImageInfo(source) {
+    const type = getSourceType(source);
+    if (type) return type.requestImageInfo(source);
+    return { ok: false, reason: "Keine passende Abruf-Methode für diese Quelle bekannt." };
+  }
+
+  function buildCitationText(source, imageInfo) {
+    const type = getSourceType(source);
+    const citation = type
+      ? type.buildCitation(source, imageInfo)
+      : `* Digitalisat: [${source.url} unbekanntes Archiv] – ` +
         `Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung ` +
         `direkt bei der Institution nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.`;
-    }
 
     // Kein <img src="externe-URL">-Einfügen: WikiTree bindet fremde,
     // extern gehostete Bild-URLs nicht direkt ein - Bilder müssen dort
@@ -436,86 +604,6 @@
     const base = cleaned || domainLabel(source);
     const page = imageInfo && imageInfo.pageNumber;
     return page ? `${base} - Seite ${page}` : base;
-  }
-
-  async function requestImageInfo(source) {
-    if (source.domain === "arcinsys-direkt") {
-      const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
-      const result = await chrome.runtime.sendMessage({
-        type: "FIND_DFG_VIEWER_LINK_FROM_ARCINSYS",
-        payload: { url: source.url, pageNumber }
-      });
-      if (result && result.suggestedUrl) {
-        source.suggestedUrl = result.suggestedUrl; // für "Quelle übernehmen"-Button im Panel
-      }
-      if (result && result.ok) {
-        return result; // enthält bereits imageUrl/label/pageNumber über die METS-Logik
-      }
-      const pageHint = pageNumber ? "" : source.citedPageHint ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.` : "";
-      return {
-        ok: false,
-        reason: (result && result.reason) || `Link verweist nur auf das Gesamtdokument, nicht auf eine einzelne Seite.${pageHint}`,
-        suggestedUrl: result && result.suggestedUrl
-      };
-    }
-    if (source.domain === "dfg-viewer" || source.domain === "landesarchiv-nrw-direkt") {
-      return chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_DFG_VIEWER", url: source.url });
-    }
-    if (source.domain === "matricula") {
-      // Erst die günstige Methode (einfacher HTML-Abruf, jetzt mit
-      // gelockertem Filter für Kitodo-typische <img>-Tags ohne
-      // erkennbare Dateiendung). Nur wenn das nichts findet, der
-      // aufwändigere Hidden-Tab-Versuch (inkl. Canvas-Snapshot) als
-      // Fallback.
-      const quick = await chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_URL", url: source.url });
-      if (quick && quick.ok) return quick;
-      return chrome.runtime.sendMessage({ type: "FIND_IMAGE_VIA_HIDDEN_TAB", url: source.url });
-    }
-    if (source.domain === "landesarchiv-bw-plink") {
-      // Zuerst der direkte Weg: bild_zoom-Seiten rendern die URL des
-      // angezeigten JPEGs (bild.php) ins HTML - Vorschau und Download
-      // ohne Nebenwirkung, wie bei Matricula dv1 (seit 0.16.0). Nur wenn
-      // das nichts liefert, bleibt es beim Formular-Download: Dessen
-      // Formular-Submit ist selbst schon der Download-Trigger, deshalb
-      // darf er erst beim "gemeinsam herunterladen"-Klick passieren -
-      // die reinen Prüfung signalisiert nur, dass diese Quelle so
-      // verarbeitet werden kann.
-      const quick = await chrome.runtime.sendMessage({ type: "FIND_IMAGE_FOR_URL", url: source.url });
-      if (quick && quick.ok) return quick;
-      if (quick && !quick.ok && /antwortet leer/.test(quick.reason || "")) {
-        // Ehrlich bleiben: toter ?i-Link (das Format ?i=<id> wird nicht mehr aufgelöst - für JEDEN eine leere Seite; das ?f=<archiv>-<bestand>-<bild>-Format funktioniert noch). Grund als Status zeigen statt dem falschen Formular-Download-Versprechen.
-        return quick;
-      }
-      const pageNumber = source.citedPageHint ? parseInt(source.citedPageHint, 10) : null;
-      return { ok: true, via: "form-download-pending", label: "Landesarchiv Baden-Württemberg", pageNumber };
-    }
-    if (source.domain === "wbc-dlibra") {
-      // dLibra: METS-Datei der Edition über den OAI-Endpunkt auswerten
-      // (Titel, Seiten, Rechte; PublicAccess-Prüfung gegen Sperren). Die
-      // Seitenzahl kommt aus der Quellenbeschreibung, falls vorhanden.
-      return chrome.runtime.sendMessage({
-        type: "FIND_IMAGE_FOR_WBC_DLIBRA",
-        payload: {
-          url: source.url,
-          pageNumber: source.citedPageHint ? parseInt(source.citedPageHint, 10) : null,
-        },
-      });
-    }
-    if (source.domain === "sonstige-quelle") {
-      // Unbekanntes System (z.B. ein anderes Landesarchiv-System, ein
-      // Bibliothekskatalog o.ä.; dLibra wird seit 0.17.0 unterstützt) -
-      // kein Fetch-Versuch, da weder host_permissions noch eine
-      // passende Extraktionslogik dafür existieren. Lieber ehrlich sofort
-      // sagen, dass das (noch) nicht unterstützt wird, statt einen
-      // sicher fehlschlagenden Netzwerk-Versuch zu starten.
-      const info = institutionInfoForSource(source);
-      const pageHint = source.citedPageHint ? ` Laut Quellenbeschreibung vermutlich Seite ${source.citedPageHint}.` : "";
-      return {
-        ok: false,
-        reason: info.protectedReason || `Dieses System wird von der Extension noch nicht unterstützt - bitte manuell öffnen und herunterladen.${pageHint}`
-      };
-    }
-    return { ok: false, reason: "Keine passende Abruf-Methode für diese Quelle bekannt." };
   }
 
   // ---------------------------------------------------------------------
@@ -646,29 +734,6 @@
   // ---------------------------------------------------------------------
   // UI
   // ---------------------------------------------------------------------
-
-  function domainLabel(source) {
-    if (source.domain === "matricula") return "Matricula";
-    if (source.domain === "dfg-viewer" || source.domain === "landesarchiv-nrw-direkt") {
-      const info = institutionInfoForSource(source);
-      return source.domain === "dfg-viewer" ? `${info.name} (DFG-Viewer)` : info.name;
-    }
-    if (source.domain === "arcinsys-direkt") {
-      const info = institutionInfoForSource(source);
-      return `${info.name} (Gesamtdokument)`;
-    }
-    if (source.domain === "landesarchiv-bw-plink") {
-      return institutionInfoForSource(source).name;
-    }
-    if (source.domain === "wbc-dlibra") {
-      return institutionInfoForSource(source).name;
-    }
-    if (source.domain === "sonstige-quelle") {
-      const info = institutionInfoForSource(source);
-      return info.name;
-    }
-    return "Quelle";
-  }
 
   function createPanel(sources) {
     const panel = document.createElement("div");
@@ -1047,5 +1112,24 @@
   const sources = findSourceLinks();
   if (sources.length > 0) {
     createLaunchButton(sources);
+  }
+
+  // Nur für Tests (test/content.test.js): Der Test setzt vor dem Laden
+  // globalThis.__QBA_TEST__ und bekommt dann die reinen Funktionen. Im
+  // Browser ist die Variable nie gesetzt - dort ändert sich nichts.
+  if (globalThis.__QBA_TEST__) {
+    globalThis.__QBA_TEST__ = {
+      SOURCE_TYPES,
+      classifyDomain,
+      isSafeUrl,
+      citationDocPage,
+      buildCitationPageSuffix,
+      buildCitationText,
+      institutionInfoForSource,
+      domainLabel,
+      requestImageInfo,
+      cleanLabel,
+      humanizeHost
+    };
   }
 })();

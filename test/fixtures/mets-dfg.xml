@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mets:mets xmlns:mets="http://www.loc.gov/METS/" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <mets:fileSec>
+    <mets:fileGrp USE="DEFAULT">
+      <mets:file ID="DEF1" MIMETYPE="image/jpeg">
+        <mets:FLocat LOCTYPE="URL" xlink:href="/images/default/0001.jpg"/>
+      </mets:file>
+      <mets:file ID="DEF2" MIMETYPE="image/jpeg">
+        <mets:FLocat LOCTYPE="URL" xlink:href="/images/default/0002.jpg"/>
+      </mets:file>
+      <mets:file ID="DEF3" MIMETYPE="image/jpeg">
+        <mets:FLocat LOCTYPE="URL" xlink:href="/images/default/0003.jpg"/>
+      </mets:file>
+    </mets:fileGrp>
+    <mets:fileGrp USE="MAX">
+      <mets:file ID="MAX1" MIMETYPE="image/jpeg" xlink:href="https://img.example-archiv.de/max/0001.jpg"/>
+      <mets:file ID="MAX2" MIMETYPE="image/jpeg" xlink:href="https://img.example-archiv.de/max/0002.jpg"/>
+      <mets:file ID="MAX3" MIMETYPE="image/jpeg" xlink:href="https://img.example-archiv.de/max/0003.jpg"/>
+    </mets:fileGrp>
+  </mets:fileSec>
+  <mets:structMap TYPE="PHYSICAL">
+    <mets:div ID="physroot" TYPE="physSequence">
+      <mets:div ID="phys1" TYPE="page" ORDER="1">
+        <mets:fptr FILEID="DEF1"/>
+        <mets:fptr FILEID="MAX1"/>
+      </mets:div>
+      <mets:div ID="phys2" TYPE="page" ORDER="2">
+        <mets:fptr FILEID="DEF2"/>
+        <mets:fptr FILEID="MAX2"/>
+      </mets:div>
+      <mets:div ID="phys3" TYPE="page" ORDER="3">
+        <mets:fptr FILEID="DEF3"/>
+        <mets:fptr FILEID="MAX3"/>
+      </mets:div>
+    </mets:div>
+  </mets:structMap>
+</mets:mets>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+<GetRecord><record><metadata>
+<mets:mets xmlns:mets="http://www.loc.gov/METS/" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dlibra_avs="http://dlibra.psnc.pl/avs" LABEL='Księga urodzin i chrztów'>
+  <mets:dmdSec ID="dmd1"><mets:mdWrap MDTYPE="DC"><mets:xmlData>
+    <dc:title><![CDATA[Księga urodzin & chrztów]]></dc:title>
+    <dc:date>1850</dc:date>
+    <dc:rights>Biblioteka Raczyńskich</dc:rights>
+  </mets:xmlData></mets:mdWrap></mets:dmdSec>
+  <mets:amdSec ID="amd1"><dlibra_avs:PublicAccess>false</dlibra_avs:PublicAccess></mets:amdSec>
+  <mets:fileSec>
+    <mets:fileGrp USE="original">
+      <mets:file ID="DjVu_original2" MIMETYPE="image/x.djvu"><mets:FLocat LOCTYPE="URL" xlink:href="https://www.wbc.poznan.pl/Content/156210/directory/page3.djvu"/></mets:file>
+      <mets:file ID="DjVu_original0" MIMETYPE="image/x.djvu"><mets:FLocat LOCTYPE="URL" xlink:href="https://www.wbc.poznan.pl/Content/156210/directory/page1.djvu"/></mets:file>
+      <mets:file ID="DjVu_original_all" MIMETYPE="image/x.djvu"><mets:FLocat LOCTYPE="URL" xlink:href="https://www.wbc.poznan.pl/Content/156210/index.djvu"/></mets:file>
+      <mets:file ID="DjVu_original1" MIMETYPE="image/x.djvu"><mets:FLocat LOCTYPE="URL" xlink:href="https://www.wbc.poznan.pl/Content/156210/directory/page2.djvu"/></mets:file>
+    </mets:fileGrp>
+  </mets:fileSec>
+</mets:mets>
+</metadata></record></GetRecord></OAI-PMH>

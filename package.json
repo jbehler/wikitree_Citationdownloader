@@ -1,0 +1,14 @@
+{
+  "name": "wikitree-quellenbilder-assistent",
+  "version": "0.17.1",
+  "private": true,
+  "description": "WikiTree Quellenbilder-Assistent (Chrome MV3-Extension) - Entwicklungs-Tooling (Tests, Lint)",
+  "scripts": {
+    "test": "node --test",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0"
+  }
+}

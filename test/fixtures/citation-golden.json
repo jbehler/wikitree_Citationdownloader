@@ -1,0 +1,175 @@
+[
+  {
+    "name": "matricula ohne Info",
+    "citation": "* Digitalisat: [https://data.matricula-online.eu/de/deutschland/aachen/aachen-hl-kreuz/KB+001/?pg=3 Matricula Online] – Kirchenbuch-Digitalisat. Lizenz: [https://creativecommons.org/licenses/by-nc-nd/2.0/deed.de CC BY-NC-ND 2.0] (nicht-kommerziell, unverändert, mit Namensnennung). Laut Matricula-Nutzungsbedingungen bitte das zuständige Diözesan-/Landesarchiv über die Online-Veröffentlichung informieren; ein Link genügt dafür.",
+    "label": "Matricula",
+    "institution": null
+  },
+  {
+    "name": "matricula mit Seitenzahl",
+    "citation": "* Digitalisat: [https://data.matricula-online.eu/de/deutschland/aachen/aachen-hl-kreuz/KB+001/?pg=3 Matricula Online (Seite 197)] – Kirchenbuch-Digitalisat. Lizenz: [https://creativecommons.org/licenses/by-nc-nd/2.0/deed.de CC BY-NC-ND 2.0] (nicht-kommerziell, unverändert, mit Namensnennung). Laut Matricula-Nutzungsbedingungen bitte das zuständige Diözesan-/Landesarchiv über die Online-Veröffentlichung informieren; ein Link genügt dafür.",
+    "label": "Matricula",
+    "institution": null
+  },
+  {
+    "name": "matricula Hinweis gleich Seite",
+    "citation": "* Digitalisat: [https://data.matricula-online.eu/x/?pg=1 Matricula Online (Seite 197)] – Kirchenbuch-Digitalisat. Lizenz: [https://creativecommons.org/licenses/by-nc-nd/2.0/deed.de CC BY-NC-ND 2.0] (nicht-kommerziell, unverändert, mit Namensnennung). Laut Matricula-Nutzungsbedingungen bitte das zuständige Diözesan-/Landesarchiv über die Online-Veröffentlichung informieren; ein Link genügt dafür.",
+    "label": "Matricula",
+    "institution": null
+  },
+  {
+    "name": "matricula nur Hinweis",
+    "citation": "* Digitalisat: [https://data.matricula-online.eu/x/?pg=1 Matricula Online (vermutlich Seite 12)] – Kirchenbuch-Digitalisat. Lizenz: [https://creativecommons.org/licenses/by-nc-nd/2.0/deed.de CC BY-NC-ND 2.0] (nicht-kommerziell, unverändert, mit Namensnennung). Laut Matricula-Nutzungsbedingungen bitte das zuständige Diözesan-/Landesarchiv über die Online-Veröffentlichung informieren; ein Link genügt dafür.",
+    "label": "Matricula",
+    "institution": null
+  },
+  {
+    "name": "dfg-viewer bekanntes Archiv unbekannt",
+    "citation": "* Digitalisat: [https://dfg-viewer.de/show?tx_dlf[id]=https%3A%2F%2Fexample-archiv.de%2Fmets.xml&tx_dlf[page]=5 Example-archiv, via DFG-Viewer (Seite 5)] – Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung direkt bei Example-archiv nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.",
+    "label": "Example-archiv (DFG-Viewer)",
+    "institution": {
+      "name": "Example-archiv",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "dfg-viewer Landesarchiv NRW",
+    "citation": "* Digitalisat: [https://dfg-viewer.de/show?tx_dlf[id]=https%3A%2F%2Fwww.landesarchiv-nrw.de%2Fmets.xml&tx_dlf[page]=5 Landesarchiv-nrw, via DFG-Viewer (Seite 7, im Dokument Seite 5)] – Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung direkt bei Landesarchiv-nrw nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.",
+    "label": "Landesarchiv-nrw (DFG-Viewer)",
+    "institution": {
+      "name": "Landesarchiv-nrw",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "dfg-viewer ohne METS-Host",
+    "citation": "* Digitalisat: [https://dfg-viewer.de/show unbekanntes Archiv, via DFG-Viewer] – Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung direkt bei unbekanntes Archiv nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.",
+    "label": "unbekanntes Archiv (DFG-Viewer)",
+    "institution": {
+      "name": "unbekanntes Archiv",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "landesarchiv-nrw-direkt",
+    "citation": "* Digitalisat: [https://www.landesarchiv-nrw.de/viewer/x Landesarchiv Nordrhein-Westfalen (Seite 3)] – Lizenz: [https://creativecommons.org/licenses/by-sa/4.0/deed.de CC BY-SA 4.0] gemäß den offiziellen [https://www.landesarchiv-nrw.de/digitalisate/LAV_NRW_Nutzungsbedingungen_Digitalisate.pdf Nutzungsbedingungen] des Landesarchivs NRW. Bitte bei Weiterverwertung: Archivsignatur nennen, den/die Autor*in bzw. Urheber*in nennen (falls bekannt), und bei Online-Nutzung zusätzlich den beständigen Verweis (Permalink) zur Fundstelle in den Findmitteln angeben. Gilt für Digitalisate aus dem Online-Findmittelsystem; bei separat bestellten Digitalisaten ggf. abweichende Bedingungen erfragen.",
+    "label": "Landesarchiv Nordrhein-Westfalen",
+    "institution": {
+      "name": "Landesarchiv Nordrhein-Westfalen",
+      "citationLicenseNote": "Lizenz: [https://creativecommons.org/licenses/by-sa/4.0/deed.de CC BY-SA 4.0] gemäß den offiziellen [https://www.landesarchiv-nrw.de/digitalisate/LAV_NRW_Nutzungsbedingungen_Digitalisate.pdf Nutzungsbedingungen] des Landesarchivs NRW. Bitte bei Weiterverwertung: Archivsignatur nennen, den/die Autor*in bzw. Urheber*in nennen (falls bekannt), und bei Online-Nutzung zusätzlich den beständigen Verweis (Permalink) zur Fundstelle in den Findmitteln angeben. Gilt für Digitalisate aus dem Online-Findmittelsystem; bei separat bestellten Digitalisaten ggf. abweichende Bedingungen erfragen."
+    }
+  },
+  {
+    "name": "arcinsys ohne Bild",
+    "citation": "* Digitalisat: [https://arcinsys.hessen.de/arcinsys/detailAction?detailid=v1 Arcinsys Hessen (vermutlich Seite 4)] – Link verweist auf das Gesamtdokument, bitte im Dokument selbst zur passenden Seite navigieren. Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Arcinsys Hessen nachsehen.",
+    "label": "Arcinsys Hessen (Gesamtdokument)",
+    "institution": {
+      "name": "Arcinsys Hessen",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "arcinsys mit Bild",
+    "citation": "* Digitalisat: [https://www.arcinsys.niedersachsen.de/arcinsys/x Arcinsys Niedersachsen (Seite 2)] – Bild wurde über den auf der Seite gefundenen DFG-Viewer-Link ermittelt (METS-Logik). Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Arcinsys Niedersachsen nachsehen.",
+    "label": "Arcinsys Niedersachsen (Gesamtdokument)",
+    "institution": {
+      "name": "Arcinsys Niedersachsen",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "bw bild-php mit Rechten Hinweis abweichend",
+    "citation": "* Digitalisat: [https://www.landesarchiv-bw.de/plink/?f=1-456 Landesarchiv Baden-Württemberg (Seite 12, im Dokument Bild 74)] – Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt). Auf der Digitalisat-Seite ist die Rechtekategorie UND gemäß rightsstatements.org ausgewählt (bei UND: Rechte unbestimmt) - bitte vor einer Veröffentlichung trotzdem die Nutzungsbedingungen bei Landesarchiv Baden-Württemberg prüfen.",
+    "label": "Landesarchiv Baden-Württemberg",
+    "institution": {
+      "name": "Landesarchiv Baden-Württemberg",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "bw bild-php nur Dokumentseite",
+    "citation": "* Digitalisat: [https://www.landesarchiv-bw.de/plink/?f=1-456 Landesarchiv Baden-Württemberg (im Dokument Bild 74)] – Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt). Auf der Digitalisat-Seite ist die Rechtekategorie UND gemäß rightsstatements.org ausgewählt (bei UND: Rechte unbestimmt) - bitte vor einer Veröffentlichung trotzdem die Nutzungsbedingungen bei Landesarchiv Baden-Württemberg prüfen.",
+    "label": "Landesarchiv Baden-Württemberg",
+    "institution": {
+      "name": "Landesarchiv Baden-Württemberg",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "bw bild-php Hinweis gleich",
+    "citation": "* Digitalisat: [https://www.landesarchiv-bw.de/plink/?f=1-456 Landesarchiv Baden-Württemberg (Seite 74)] – Bild automatisch aus der Digitalisat-Seite ermittelt und heruntergeladen (JPEG in voller Scan-Auflösung, wie auf der Seite angezeigt). Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Landesarchiv Baden-Württemberg nachsehen.",
+    "label": "Landesarchiv Baden-Württemberg",
+    "institution": {
+      "name": "Landesarchiv Baden-Württemberg",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "bw Formular-Download",
+    "citation": "* Digitalisat: [https://www.landesarchiv-bw.de/plink/?f=1-456 Landesarchiv Baden-Württemberg (vermutlich Seite 5)] – Bilddownload über ein Formular auf der Seite. Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Landesarchiv Baden-Württemberg nachsehen.",
+    "label": "Landesarchiv Baden-Württemberg",
+    "institution": {
+      "name": "Landesarchiv Baden-Württemberg",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "bw toter Link",
+    "citation": "* Digitalisat: [https://www.landesarchiv-bw.de/plink/?i=1 Landesarchiv Baden-Württemberg] – Link veraltet: das plink-Format mit ?i=<id> wird von Landesarchiv BW nicht mehr aufgelöst (Link liefert eine leere Seite) - das plink-Format ?f=<archiv>-<bestand>-<bild> funktioniert noch; bitte den Quellen-Link aktualisieren; Bilddownload nicht möglich. Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Landesarchiv Baden-Württemberg nachsehen.",
+    "label": "Landesarchiv Baden-Württemberg",
+    "institution": {
+      "name": "Landesarchiv Baden-Württemberg",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "bw ohne Info",
+    "citation": "* Digitalisat: [https://www.landesarchiv-bw.de/plink/?f=1-2 Landesarchiv Baden-Württemberg] – Bilddownload über ein Formular auf der Seite. Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Landesarchiv Baden-Württemberg nachsehen.",
+    "label": "Landesarchiv Baden-Württemberg",
+    "institution": {
+      "name": "Landesarchiv Baden-Württemberg",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "dlibra mit allem",
+    "citation": "* Digitalisat: [https://www.wbc.poznan.pl/dlibra/publication/147448/edition/156210/content Wielkopolska Digital Library (Poznań) (Seite 8)] – Księga. Digitalisat über Wielkopolska Digital Library (Poznań) (dLibra-Digitalbibliothek). Rechteangabe des Objekts: Biblioteka Raczyńskich. Die zitierte Seite liegt als DjVu-Datei vor (kein direkt anzeigbares Bildformat) - Download über den Panel-Link, danach selbst konvertieren und hochladen. Lizenz-/Nutzungsbedingungen nicht automatisch geprüft; bitte vor einer Veröffentlichung direkt bei Wielkopolska Digital Library (Poznań) bzw. der im Objekt genannten Einrichtung nachsehen.",
+    "label": "Wielkopolska Digital Library (Poznań)",
+    "institution": {
+      "name": "Wielkopolska Digital Library (Poznań)",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "dlibra minimal",
+    "citation": "* Digitalisat: [https://www.wbc.poznan.pl/dlibra/publication/1/edition/2/content Wielkopolska Digital Library (Poznań)] – Digitalisat über Wielkopolska Digital Library (Poznań) (dLibra-Digitalbibliothek). Lizenz-/Nutzungsbedingungen nicht automatisch geprüft; bitte vor einer Veröffentlichung direkt bei Wielkopolska Digital Library (Poznań) bzw. der im Objekt genannten Einrichtung nachsehen.",
+    "label": "Wielkopolska Digital Library (Poznań)",
+    "institution": {
+      "name": "Wielkopolska Digital Library (Poznań)",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "sonstige bekannt",
+    "citation": "* Digitalisat: [https://wbc.poznan.pl/foo Wielkopolska Digital Library (Poznań) (vermutlich Seite 3)] – Automatischer Bildabruf für diese Quelle ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen. Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Wielkopolska Digital Library (Poznań) nachsehen.",
+    "label": "Wielkopolska Digital Library (Poznań)",
+    "institution": {
+      "name": "Wielkopolska Digital Library (Poznań)"
+    }
+  },
+  {
+    "name": "sonstige unbekannt",
+    "citation": "* Digitalisat: [https://www.example-bibliothek.co.uk/item/1 Example-bibliothek Co] – Automatischer Bildabruf für diese Quelle ist (noch) nicht implementiert; bitte manuell öffnen und ggf. herunterladen. Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft); bitte vor einer Veröffentlichung direkt bei Example-bibliothek Co nachsehen.",
+    "label": "Example-bibliothek Co",
+    "institution": {
+      "name": "Example-bibliothek Co",
+      "citationLicenseNote": null
+    }
+  },
+  {
+    "name": "unbekannte domain",
+    "citation": "* Digitalisat: [https://example.org/x unbekanntes Archiv] – Lizenz-/Nutzungsbedingungen nicht bekannt (nicht automatisch geprüft). Bitte vor einer Veröffentlichung direkt bei der Institution nachsehen, unter welchen Bedingungen die Nutzung erlaubt ist.",
+    "label": "Quelle",
+    "institution": null
+  }
+]
