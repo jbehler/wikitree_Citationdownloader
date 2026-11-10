@@ -156,3 +156,20 @@ test("isSafeUrl: Rastertypen ja, svg+xml und Skript-Schemata nein", () => {
   assert.equal(f("data:image/png;base64,AA", false), false);
   assert.equal(f("data:text/html,x", true), false);
 });
+
+test("SOURCE_TYPES: needsNetwork ist boolean, nur sonstige-quelle braucht keinen Netzabruf", () => {
+  for (const [name, type] of Object.entries(T.SOURCE_TYPES)) {
+    assert.equal(typeof type.needsNetwork, "boolean", name);
+    assert.equal(type.needsNetwork, name !== "sonstige-quelle", name);
+  }
+});
+
+test("buildCitationText kommt ohne imageInfo (Einfügen vor Prüfung) bei jedem Quelltyp klar", () => {
+  for (const name of Object.keys(T.SOURCE_TYPES)) {
+    const url = "https://example.org/x";
+    for (const info of [undefined, null]) {
+      const { citation } = T.buildCitationText({ url, domain: name, linkText: "x" }, info);
+      assert.match(citation, /^\* /, name);
+    }
+  }
+});

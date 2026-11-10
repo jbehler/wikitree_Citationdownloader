@@ -277,6 +277,8 @@
 
   const SOURCE_TYPES = {
     "matricula": {
+      // Echter Netzabruf (Hintergrund-Fetch/Tab) -> Pause im Prüf-Loop sinnvoll.
+      needsNetwork: true,
       label() {
         return "Matricula";
       },
@@ -303,6 +305,8 @@
     },
 
     "dfg-viewer": {
+      // Echter Netzabruf (Hintergrund-Fetch/Tab) -> Pause im Prüf-Loop sinnvoll.
+      needsNetwork: true,
       label(source) {
         return `${institutionInfoForSource(source).name} (DFG-Viewer)`;
       },
@@ -321,6 +325,8 @@
     },
 
     "landesarchiv-nrw-direkt": {
+      // Echter Netzabruf (Hintergrund-Fetch/Tab) -> Pause im Prüf-Loop sinnvoll.
+      needsNetwork: true,
       label(source) {
         return institutionInfoForSource(source).name;
       },
@@ -335,6 +341,8 @@
     },
 
     "arcinsys-direkt": {
+      // Echter Netzabruf (Hintergrund-Fetch/Tab) -> Pause im Prüf-Loop sinnvoll.
+      needsNetwork: true,
       label(source) {
         return `${institutionInfoForSource(source).name} (Gesamtdokument)`;
       },
@@ -383,6 +391,8 @@
     },
 
     "landesarchiv-bw-plink": {
+      // Echter Netzabruf (Hintergrund-Fetch/Tab) -> Pause im Prüf-Loop sinnvoll.
+      needsNetwork: true,
       label(source) {
         return institutionInfoForSource(source).name;
       },
@@ -432,6 +442,8 @@
     },
 
     "wbc-dlibra": {
+      // Echter Netzabruf (Hintergrund-Fetch/Tab) -> Pause im Prüf-Loop sinnvoll.
+      needsNetwork: true,
       label(source) {
         return institutionInfoForSource(source).name;
       },
@@ -477,6 +489,9 @@
     },
 
     "sonstige-quelle": {
+      // Kein Netzabruf nötig: requestImageInfo liefert sofort ein Ergebnis,
+      // daher auch keine Pause im Prüf-Loop.
+      needsNetwork: false,
       label(source) {
         return institutionInfoForSource(source).name;
       },
@@ -752,11 +767,13 @@
         <div id="qba-list"></div>
         <div id="qba-actions">
           <button id="qba-check-images">Bildvorschau prüfen</button>
-          <button id="qba-insert" disabled>Ausgewählte in Editor einfügen</button>
+          <button id="qba-insert">Ausgewählte in Editor einfügen</button>
+          <button id="qba-copy-selected">📋 Ausgewählte Zitate kopieren</button>
         </div>
         <div id="qba-actions-download">
           <button id="qba-download-all" disabled>⬇ Ausgewählte Bilder gemeinsam herunterladen</button>
         </div>
+        <div id="qba-message" role="status" aria-live="polite" style="display:none;"></div>
         <div id="qba-fallback" style="display:none;">
           <p class="qba-hint">Automatisches Einfügen hat nicht geklappt. Text zum manuellen Einfügen:</p>
           <textarea id="qba-fallback-text" readonly></textarea>
@@ -765,6 +782,30 @@
       </div>
     `;
     document.body.appendChild(panel);
+
+    // Meldungszeile statt alert(): blockiert die Seite nicht und bleibt im
+    // Panel sichtbar. Text immer per textContent (nie innerHTML), damit
+    // Fehlertexte aus Exceptions/Netzantworten nichts einschleusen können.
+    const messageEl = panel.querySelector("#qba-message");
+    function showMessage(text, kind) {
+      messageEl.className = `qba-msg-${kind || "info"}`;
+      messageEl.textContent = text;
+      messageEl.style.display = "block";
+    }
+
+    // Zitattext der angehakten Quellen; funktioniert auch ohne Bildprüfung
+    // (buildCitationText kommt mit imageInfo undefined/null zurecht).
+    function chosenCitationText() {
+      const checks = Array.from(panel.querySelectorAll(".qba-check"));
+      const chosen = checks.filter((c) => c.checked).map((c) => sources[parseInt(c.dataset.idx, 10)]);
+      if (chosen.length === 0) return null;
+      return chosen.map((s) => buildCitationText(s, s.imageInfo).citation).join("\n");
+    }
+
+    function showFallback(text) {
+      panel.querySelector("#qba-fallback-text").value = text;
+      panel.querySelector("#qba-fallback").style.display = "block";
+    }
 
     panel.querySelector("#qba-pick-target").addEventListener("click", () => {
       if (activePickingCancel) activePickingCancel(); // laufenden Auswahlmodus sauber beenden
@@ -857,7 +898,7 @@
           const idx = parseInt(nextBtn.dataset.idx, 10);
           const nextUrl = buildNextPageUrl(sources[idx].url);
           if (!nextUrl) {
-            alert("Konnte den Folgeseiten-Link nicht aus der URL bauen.");
+            showMessage("Konnte den Folgeseiten-Link nicht aus der URL bauen.", "error");
             return;
           }
           sources.push({
@@ -977,6 +1018,11 @@
           }
           const statusEl = panel.querySelector(`#qba-status-${i}`);
           statusEl.textContent = "prüfe …";
+          // Pause nur, wenn wirklich ein Netzabruf lief (siehe needsNetwork
+          // in SOURCE_TYPES); Cache-Treffer haben oben per continue
+          // übersprungen und kommen hier gar nicht an.
+          const type = getSourceType(sources[i]);
+          const didNetwork = !type || type.needsNetwork !== false;
           try {
             sources[i].imageInfo = await requestImageInfo(sources[i]);
           } catch (e) {
@@ -987,36 +1033,55 @@
           // Ursache für Fehlschläge bei mehreren Matricula-Quellen ein
           // serverseitiges Rate-Limit oder eine Race Condition beim
           // Fenster-Fokus-Wechsel ist, mindert das die Wahrscheinlichkeit.
-          if (i < sources.length - 1) {
+          if (didNetwork && i < sources.length - 1) {
             await new Promise((r) => setTimeout(r, 1200));
           }
         }
       } finally {
         checking = false;
         checkBtn.disabled = false;
-        panel.querySelector("#qba-insert").disabled = false;
+        // Einfügen/Kopieren sind schon ab Start aktiv; nur der Download
+        // braucht geprüfte Bild-Infos.
         panel.querySelector("#qba-download-all").disabled = false;
       }
     });
 
     panel.querySelector("#qba-insert").addEventListener("click", () => {
-      const checks = Array.from(panel.querySelectorAll(".qba-check"));
-      const chosen = checks.filter((c) => c.checked).map((c) => sources[parseInt(c.dataset.idx, 10)]);
-      if (chosen.length === 0) return;
-
-      const blocks = chosen.map((s) => buildCitationText(s, s.imageInfo).citation);
-      const fullText = blocks.join("\n");
+      const fullText = chosenCitationText();
+      if (fullText === null) {
+        showMessage("Bitte mindestens eine Quelle auswählen.", "info");
+        return;
+      }
 
       const result = insertIntoEditorOrFallback(fullText);
-      const fallbackBox = panel.querySelector("#qba-fallback");
-      const fallbackText = panel.querySelector("#qba-fallback-text");
       if (result.inserted) {
-        fallbackBox.style.display = "none";
-        alert("Eingefügt. Bitte im Editor prüfen (Vorschau!) und danach selbst bei WikiTree speichern.");
+        panel.querySelector("#qba-fallback").style.display = "none";
+        showMessage("Eingefügt. Bitte im Editor prüfen (Vorschau!) und danach selbst bei WikiTree speichern.", "ok");
       } else {
-        fallbackText.value = fullText;
-        fallbackBox.style.display = "block";
-        alert(result.reason || "Automatisches Einfügen nicht möglich - Text bitte unten kopieren.");
+        showFallback(fullText);
+        showMessage(result.reason || "Automatisches Einfügen nicht möglich - Text bitte unten kopieren.", "error");
+      }
+    });
+
+    // Direkter Kopier-Weg (vom Nutzer bevorzugt): Zwischenablage ohne den
+    // Umweg über das Fallback-Feld. Schlägt die Clipboard-API fehl
+    // (Berechtigung/Fokus), zeigen wir das Feld mit markiertem Text, damit
+    // Strg+C genügt.
+    panel.querySelector("#qba-copy-selected").addEventListener("click", async () => {
+      const text = chosenCitationText();
+      if (text === null) {
+        showMessage("Bitte mindestens eine Quelle auswählen.", "info");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        showMessage("Zitate in die Zwischenablage kopiert. Jetzt im Editor einfügen (Strg+V).", "ok");
+      } catch (e) {
+        showFallback(text);
+        const ta = panel.querySelector("#qba-fallback-text");
+        ta.focus();
+        ta.select();
+        showMessage("Automatisches Kopieren nicht möglich - der Text ist unten markiert, bitte mit Strg+C kopieren.", "error");
       }
     });
 
@@ -1027,7 +1092,7 @@
       const formDownloads = chosen.filter((s) => s.imageInfo && s.imageInfo.ok && s.imageInfo.via === "form-download-pending");
 
       if (withImages.length === 0 && formDownloads.length === 0) {
-        alert("Für keine der ausgewählten Quellen wurde ein Bild gefunden - nichts zum Herunterladen.");
+        showMessage("Für keine der ausgewählten Quellen wurde ein Bild gefunden - nichts zum Herunterladen.", "info");
         return;
       }
 
@@ -1070,12 +1135,12 @@
         const totalCount = result.results.length + formResults.length;
         if (failed.length > 0 || formFailed.length > 0) {
           const reasons = [...failed.map((f) => f.reason), ...formFailed.map((f) => f.reason)].join("; ");
-          alert(`Ordner "${result.folder}": ${totalOk} von ${totalCount} Dateien heruntergeladen. Fehler: ${reasons}`);
+          showMessage(`Ordner "${result.folder}": ${totalOk} von ${totalCount} Dateien heruntergeladen. Fehler: ${reasons}`, "error");
         } else {
-          alert(`Fertig: ${totalCount} Datei(en) + Quellenangaben in den Download-Unterordner "${result.folder}" gespeichert.`);
+          showMessage(`Fertig: ${totalCount} Datei(en) + Quellenangaben in den Download-Unterordner "${result.folder}" gespeichert.`, "ok");
         }
       } catch (e) {
-        alert(`Download fehlgeschlagen: ${String(e)}`);
+        showMessage(`Download fehlgeschlagen: ${String(e)}`, "error");
       } finally {
         btn.textContent = originalLabel;
         btn.disabled = false;
@@ -1086,9 +1151,17 @@
       const text = panel.querySelector("#qba-fallback-text").value;
       try {
         await navigator.clipboard.writeText(text);
-        panel.querySelector("#qba-copy").textContent = "Kopiert ✓";
+        const copyBtn = panel.querySelector("#qba-copy");
+        copyBtn.textContent = "Kopiert ✓";
+        // Nach ~2 s zurücksetzen, sonst wirkt der Button dauerhaft "verbraucht".
+        setTimeout(() => { copyBtn.textContent = "In Zwischenablage kopieren"; }, 2000);
+        showMessage("In die Zwischenablage kopiert.", "ok");
       } catch (e) {
         // Clipboard-API evtl. blockiert -> Text ist im Feld ohnehin markierbar
+        const ta = panel.querySelector("#qba-fallback-text");
+        ta.focus();
+        ta.select();
+        showMessage("Automatisches Kopieren nicht möglich - Text ist markiert, bitte mit Strg+C kopieren.", "error");
       }
     });
 
