@@ -131,24 +131,40 @@
     return null;
   }
 
+  // Klassifiziert nach HOSTNAME, nicht per Regex über die ganze URL: sonst
+  // würde z.B. https://example.com/?ref=matricula-online.eu als Matricula
+  // erkannt. Suffix-Match auf Label-Grenze ((^|\.)host$).
+  // Defensive Allowlist (Gegenstück zu background.js sanitizeFindResult):
+  // nur http(s) und data:image/ in img.src bzw. a.href übernehmen.
+  function isSafeUrl(url, allowDataImage) {
+    if (typeof url !== "string" || !url) return false;
+    if (allowDataImage && /^data:image\//i.test(url)) return true;
+    return /^https?:\/\//i.test(url);
+  }
+
   function classifyDomain(href) {
-    if (/dfg-viewer\.de/i.test(href)) return "dfg-viewer";
-    if (/matricula-online\.eu/i.test(href)) return "matricula";
-    if (/landesarchiv-nrw\.de/i.test(href)) return "landesarchiv-nrw-direkt";
-    if (/arcinsys\./i.test(href)) return "arcinsys-direkt";
-    if (/landesarchiv-bw\.de/i.test(href)) return "landesarchiv-bw-plink";
+    let u = null;
+    try {
+      u = new URL(href);
+    } catch (e) {
+      return "sonstige-quelle";
+    }
+    const host = u.hostname.toLowerCase();
+    const hostIs = (d) => host === d || host.endsWith("." + d);
+    if (hostIs("dfg-viewer.de")) return "dfg-viewer";
+    if (hostIs("matricula-online.eu")) return "matricula";
+    if (hostIs("landesarchiv-nrw.de")) return "landesarchiv-nrw-direkt";
+    // arcinsys.hessen.de, arcinsys.de, www.arcinsys.niedersachsen.de, ...:
+    // ein Hostname-Label "arcinsys" genügt
+    if (/(^|\.)arcinsys(\.|$)/.test(host)) return "arcinsys-direkt";
+    if (hostIs("landesarchiv-bw.de")) return "landesarchiv-bw-plink";
     // dLibra (wbc.poznan.pl, Wielkopolska Digital Library, DInGO 6.x; seit
     // 0.17.0 automatisiert per METS über OAI statt pauschal als "geschützt"
     // abzulehnen - siehe background.js, Weg 3):
     // /dlibra/publication/.../edition/.../content sowie direkte
     // Datei-/Download-URLs /Content/<id>/...
-    try {
-      const u = new URL(href);
-      if (/(^|\.)wbc\.poznan\.pl$/i.test(u.hostname)) {
-        if (/\/dlibra\//i.test(u.pathname) || /\/Content\/\d+/i.test(u.pathname)) return "wbc-dlibra";
-      }
-    } catch (e) {
-      /* keine gültige URL -> unten "sonstige-quelle" */
+    if (hostIs("wbc.poznan.pl")) {
+      if (/\/dlibra\//i.test(u.pathname) || /\/Content\/\d+/i.test(u.pathname)) return "wbc-dlibra";
     }
     return "sonstige-quelle";
   }
@@ -821,6 +837,8 @@
           // z.B. dLibra-DjVu-Seiten: kein <img>-fähiges Format. Statt eines
           // kaputten Bilds ehrlich erklären und nur den Download anbieten.
           statusEl.textContent = `Quelle geprüft (${viaLabel}) – Bildvorschau hier nicht möglich`;
+        } else if (!isSafeUrl(info.imageUrl, true)) {
+          statusEl.textContent = "Bild-URL verworfen (unzulässiges URL-Schema)";
         } else {
           statusEl.textContent = `Bild gefunden (${viaLabel})`;
           const img = document.createElement("img");
@@ -844,8 +862,9 @@
           note.textContent = `⚠ ${info.caveat}`;
           previewEl.appendChild(note);
         }
+        const dlUrl = info.downloadUrl || info.imageUrl;
         const dl = document.createElement("a");
-        dl.href = info.downloadUrl || info.imageUrl;
+        if (isSafeUrl(dlUrl, true)) dl.href = dlUrl;
         dl.download = `${buildFileLabel(sources[i], info)}.${guessExtension(info)}`;
         dl.target = "_blank";
         dl.rel = "noopener";
@@ -856,7 +875,7 @@
         statusEl.textContent = `kein Bild automatisch gefunden – es wird nur der Link zitiert (${(info && info.reason) || "unbekannt"})`;
       }
 
-      if (info && info.suggestedUrl) {
+      if (info && info.suggestedUrl && isSafeUrl(info.suggestedUrl, false)) {
         const applyBtn = document.createElement("button");
         applyBtn.className = "qba-apply-suggestion";
         applyBtn.textContent = "💡 Quelle auf gefundenen DFG-Viewer-Link umstellen";

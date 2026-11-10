@@ -877,11 +877,59 @@ function looksLikeWbcPowChallenge(body) {
   return /High Load\s*-\s*Verifying Browser/i.test(body || "") || /captcha_pow/i.test(body || "");
 }
 
+// ---------------------------------------------------------------------
+// URL-Allowlist
+// ---------------------------------------------------------------------
+// imageUrl/downloadUrl/suggestedUrl stammen aus fremden Daten (METS-XML von
+// beliebigen Hosts - tx_dlf[id] in einem DFG-Viewer-Link kann auf jeden
+// Server zeigen -, BW-HTML, base64-dekodierte Matricula-URLs; WikiTree-
+// Profile kann jeder editieren). Sie landen im Content Script in img.src /
+// a.href und hier in chrome.downloads.download. Daher nur http:/https:
+// (und data:image/... fuer Canvas-Schnappschuesse, nur wo imageOk=true)
+// zulassen - nie javascript:, file:, blob:, chrome-extension: o.ae.
+function isSafeExternalUrl(url, { allowDataImage = false } = {}) {
+  if (typeof url !== "string" || !url) return false;
+  if (allowDataImage && /^data:image\//i.test(url)) return true;
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch (e) {
+    return false;
+  }
+}
+
+// Prueft die URL-Felder eines FIND_*-Ergebnisses; unzulaessig => ok:false.
+function sanitizeFindResult(result) {
+  if (!result || typeof result !== "object") return result;
+  const bad = (field) => ({
+    ok: false,
+    reason: `Ergebnis verworfen: unzulässiges URL-Schema in ${field} (nur http/https erlaubt).`
+  });
+  if (result.imageUrl != null && !isSafeExternalUrl(result.imageUrl, { allowDataImage: true })) return bad("imageUrl");
+  if (result.downloadUrl != null && !isSafeExternalUrl(result.downloadUrl, { allowDataImage: true })) return bad("downloadUrl");
+  if (result.suggestedUrl != null && !isSafeExternalUrl(result.suggestedUrl)) return bad("suggestedUrl");
+  return result;
+}
+
 // Text eines XML-Elements, tolerant gegenueber Namespace-Praefix, CDATA
 // und eingebetteten Kind-Elementen; Entities werden dekodiert.
+// Der uebergebene Name darf ein Praefix enthalten ("dc:title"): Zuerst wird
+// das exakte Praefix gesucht (damit z.B. <dc:title> einem <mods:title>
+// vorgezogen wird); findet sich dort nichts, passt ein beliebiges Praefix
+// (oder keins) vor dem lokalen Namen - METS/OAI-Dokumente binden denselben
+// Namespace gern unter anderem Praefix ein. Regex-Sonderzeichen im Namen
+// werden escaped.
 function extractCdataOrText(xml, tagName) {
-  const re = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
-  const m = re.exec(xml || "");
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tryTag = (nameRe) => {
+    const re = new RegExp(`<${nameRe}\\b[^>]*>([\\s\\S]*?)<\\/${nameRe}>`, "i");
+    return re.exec(xml || "");
+  };
+  let m = tryTag(escapeRe(tagName));
+  if (!m) {
+    const local = tagName.includes(":") ? tagName.slice(tagName.lastIndexOf(":") + 1) : tagName;
+    m = tryTag(`(?:[A-Za-z_][\\w.-]*:)?${escapeRe(local)}`);
+  }
   if (!m) return null;
   let val = m[1];
   const cdata = /<!\[CDATA\[([\s\S]*?)\]\]>/.exec(val);
@@ -1554,6 +1602,10 @@ async function bulkDownload(payload) {
 
   for (const file of payload.files || []) {
     const safeName = sanitizeForFilesystem(file.suggestedName);
+    if (!file || !isSafeExternalUrl(file.url, { allowDataImage: true })) {
+      results.push({ ok: false, reason: `${safeName}: unzulässiges URL-Schema (nur http/https erlaubt)` });
+      continue;
+    }
     try {
       const id = await chrome.downloads.download({
         url: file.url,
@@ -1876,22 +1928,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return undefined;
   switch (msg.type) {
     case "FIND_IMAGE_FOR_URL":
-      fetchAndFindImageGeneric(msg.url).then(sendResponse);
+      fetchAndFindImageGeneric(msg.url).then((r) => sendResponse(sanitizeFindResult(r)));
       return true;
     case "FIND_IMAGE_FOR_WBC_DLIBRA":
-      findImageFromWbcDlibra(msg.payload || {}).then(sendResponse);
+      findImageFromWbcDlibra(msg.payload || {}).then((r) => sendResponse(sanitizeFindResult(r)));
       return true;
     case "FIND_IMAGE_FOR_DFG_VIEWER":
-      fetchImageFromDfgViewerLink(msg.url).then(sendResponse);
+      fetchImageFromDfgViewerLink(msg.url).then((r) => sendResponse(sanitizeFindResult(r)));
       return true;
     case "FIND_IMAGE_VIA_HIDDEN_TAB":
-      fetchImageViaHiddenTab(msg.url).then(sendResponse);
+      fetchImageViaHiddenTab(msg.url).then((r) => sendResponse(sanitizeFindResult(r)));
       return true;
     case "BULK_DOWNLOAD":
       bulkDownload(msg.payload).then(sendResponse);
       return true;
     case "FIND_DFG_VIEWER_LINK_FROM_ARCINSYS":
-      findDfgViewerLinkFromArcinsys(msg.payload).then(sendResponse);
+      findDfgViewerLinkFromArcinsys(msg.payload).then((r) => sendResponse(sanitizeFindResult(r)));
       return true;
     case "SUBMIT_FORM_AND_DOWNLOAD": {
       const { url, folder, suggestedNameBase } = msg.payload || {};
