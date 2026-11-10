@@ -390,3 +390,42 @@ test("validatePendingUploadInput: URL-Allowlist, personId, Dateiname", () => {
   assert.equal(P.validatePendingUploadInput({ personId: "1", url: "https://e.org/a.jpg", filename: "" }).ok, false);
   assert.equal(P.validatePendingUploadInput(null).ok, false);
 });
+
+test("buildUploadSourceText: kurz bleibt, Bullet/Zeilenumbrüche werden bereinigt", () => {
+  const c = "* Digitalisat: [https://example.org/x?pg=3 Beispiel (Seite 3)] – Kirchenbuch.\n  Lizenz geprüft.";
+  assert.equal(P.buildUploadSourceText(c), "Digitalisat: [https://example.org/x?pg=3 Beispiel (Seite 3)] – Kirchenbuch. Lizenz geprüft.");
+});
+
+test("buildUploadSourceText: kürzt hinter dem ersten ' – ' mit …, schneidet die URL nie ab", () => {
+  const head = "Digitalisat: [https://example.org/" + "a".repeat(100) + " Beispiel]";
+  const c = `* ${head} – ${"Lizenztext ".repeat(200)}`;
+  const out = P.buildUploadSourceText(c, 800);
+  assert.ok(out.length <= 800);
+  assert.ok(out.startsWith(head + " – "));
+  assert.ok(out.endsWith("…"));
+  assert.ok(out.length >= 20);
+});
+
+test("buildUploadSourceText: überlanger Kopf bleibt unverändert (URL nie abgeschnitten)", () => {
+  const head = "[https://example.org/" + "a".repeat(900) + " X]";
+  assert.equal(P.buildUploadSourceText(head + " – Rest", 800), head);
+});
+
+test("isDirectUploadType / withJpegExtension / stripFileExtension", () => {
+  assert.equal(P.isDirectUploadType("image/png"), true);
+  assert.equal(P.isDirectUploadType("image/webp"), false);
+  assert.equal(P.withJpegExtension("Matricula - Seite 3.webp"), "Matricula - Seite 3.jpg");
+  assert.equal(P.withJpegExtension("Ohne"), "Ohne.jpg");
+  assert.equal(P.stripFileExtension("A - Seite 3.jpg"), "A - Seite 3");
+  assert.equal(P.WIKITREE_UPLOAD_MAX_BYTES, 10 * 1024 * 1024);
+});
+
+test("Upload-Formular-Fixture enthält die von content.js verwendeten Selektoren", () => {
+  const html = fs.readFileSync(path.join(__dirname, "fixtures", "upload-photo-form.html"), "utf8");
+  const code = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  for (const id of ["wpUploadFile", "wpUploadDescription", "photo_title", "wpImageType-source"]) {
+    assert.ok(html.includes(`id="${id}"`), `Fixture: ${id}`);
+    assert.ok(code.includes(`#${id}`), `content.js: #${id}`);
+  }
+  assert.ok(html.includes('id="photo_upload"'));
+});

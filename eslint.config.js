@@ -51,7 +51,8 @@ module.exports = [
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "script",
-      globals: { ...globals.browser, ...globals.webextensions }
+      // lib/parsers.js wird per manifest.json vor content.js geladen.
+      globals: { ...globals.browser, ...globals.webextensions, ...parserGlobals }
     }
   },
   {

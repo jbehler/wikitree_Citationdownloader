@@ -255,3 +255,12 @@ test("getUploadPhotoPersonId: nur Special:UploadPhoto mit numerischer person_id"
   assert.equal(T.getUploadPhotoPersonId("/index.php", ""), null);
   assert.equal(T.getUploadPhotoPersonId("/index.php", undefined), null);
 });
+
+test("getPageDataPersonId: nur bei passender WikiTree-ID und numerischer data-mid", () => {
+  assert.equal(T.getPageDataPersonId("Behler-64", "27173610", "Behler-64"), "27173610");
+  assert.equal(T.getPageDataPersonId("Andere-1", "27173610", "Behler-64"), null);
+  assert.equal(T.getPageDataPersonId("Behler-64", "abc", "Behler-64"), null);
+  assert.equal(T.getPageDataPersonId("Behler-64", "", "Behler-64"), null);
+  assert.equal(T.getPageDataPersonId(undefined, "1", "Behler-64"), null);
+  assert.equal(T.getPageDataPersonId("", "1", ""), null);
+});

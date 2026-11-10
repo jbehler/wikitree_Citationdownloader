@@ -1171,7 +1171,7 @@ function removePendingUpload(personId, id) {
 // (Seite wikitree.com) könnte fremde Archive wegen CORS nicht selbst laden;
 // der Worker darf das dank host_permissions. Es wird nur geladen, was als
 // pending upload der personId gespeichert wurde (kein offener Proxy für
-// beliebige URLs). Strenge Prüfung: nur Rasterbilder, max. 25 MB.
+// beliebige URLs). Strenge Prüfung: nur Rasterbilder, max. 10 MB.
 async function fetchUploadFile(msg) {
   const url = msg && msg.url;
   if (!isSafeExternalUrl(url, { allowDataImage: true })) return { ok: false, reason: "Unzulässige Bild-URL" };
@@ -1188,10 +1188,10 @@ async function fetchUploadFile(msg) {
     }
     const declared = parseInt(res.headers.get("content-length") || "", 10);
     if (Number.isFinite(declared) && declared > UPLOAD_MAX_BYTES) {
-      return { ok: false, reason: "Datei größer als 25 MB" };
+      return { ok: false, reason: "Datei größer als 10 MB" };
     }
     const buf = await res.arrayBuffer();
-    if (buf.byteLength > UPLOAD_MAX_BYTES) return { ok: false, reason: "Datei größer als 25 MB" };
+    if (buf.byteLength > UPLOAD_MAX_BYTES) return { ok: false, reason: "Datei größer als 10 MB" };
     return { ok: true, contentType: type, base64: arrayBufferToBase64(buf) };
   } catch (e) {
     return { ok: false, reason: String(e && e.message ? e.message : e) };

@@ -245,6 +245,17 @@
     return url.href;
   }
 
+  // person_id aus <div id="pageData" data-mnamedb="Behler-64" data-mid="27173610">.
+  // Nur wenn data-mnamedb zur WikiTree-ID der URL passt (sonst gehört das
+  // Element evtl. zu einer anderen Person, z. B. dem eingeloggten Nutzer) und
+  // data-mid rein numerisch ist. Auf der Upload-Seite verifiziert, auf der
+  // Profilseite wahrscheinlich, aber nicht verifiziert -> null ist ein
+  // normaler Fall (dann Anker bzw. API).
+  function getPageDataPersonId(mnamedb, mid, wikiTreeId) {
+    if (typeof mnamedb !== "string" || !mnamedb || mnamedb !== wikiTreeId) return null;
+    return typeof mid === "string" && /^\d+$/.test(mid) ? mid : null;
+  }
+
   // Für den Upload-Link: ID aus der Bearbeitungsseite/Profil-DOM, sonst die
   // per WikiTree-API ermittelte (Profilseite).
   function getKnownPersonId() {
@@ -255,13 +266,21 @@
     return buildUploadPhotoUrl(getKnownPersonId());
   }
 
-  // Holt die person_id über den Background (WikiTree-API) - nur wenn die
+  // Ermittelt die person_id (pageData, Edit-Link, sonst WikiTree-API) - API nur wenn die
   // Seite sie nicht selbst liefert und die Pfad-ID wie eine WikiTree-ID
   // aussieht (z. B. "Behler-64"). Fehler sind unkritisch: dann gibt es
   // einfach keinen Upload-Link (wie bisher), keine ID wird geraten.
+  // Reihenfolge: 1) #pageData[data-mid], 2) Edit-Link im DOM, 3) API.
   async function resolvePersonIdViaApi() {
-    if (getCurrentEditPersonId()) return;
     const wikiTreeId = getWikiTreeIdFromUrl();
+    const pd = document.querySelector("#pageData");
+    const fromPageData = pd && pd.dataset ? getPageDataPersonId(pd.dataset.mnamedb, pd.dataset.mid, wikiTreeId) : null;
+    if (fromPageData) {
+      apiPersonId = fromPageData;
+      personIdListeners.forEach((fn) => fn());
+      return;
+    }
+    if (getCurrentEditPersonId()) return;
     if (!/^[^\s/]+-\d+$/.test(wikiTreeId)) return;
     try {
       const res = await chrome.runtime.sendMessage({ type: "GET_WIKITREE_PERSON_ID", wikiTreeId });
@@ -999,12 +1018,11 @@
   // der neue Tab auf - sonst könnte die Upload-Seite die Liste noch leer
   // vorfinden. Klappt das Speichern nicht, öffnet sich die Seite trotzdem
   // (dann ohne Vorbelegung) und onResult meldet es. Mittlere Maustaste
-  // löst kein click aus und öffnet ohne Vorbelegung - bewusst hingenommen.
+  // löst kein click aus: dafür gibt es einen auxclick-Handler.
   function createPendingUploadLink(uploadUrl, personId, source, info, onResult) {
     const up = createUploadLink(uploadUrl);
     up.title = "Merkt sich Bild und Quellenangabe und öffnet die Upload-Seite (dort Vorbelegung per Panel)";
-    up.addEventListener("click", async (e) => {
-      e.preventDefault();
+    const openWithPrefill = async () => {
       let ok = false;
       let reason = "";
       try {
@@ -1024,6 +1042,17 @@
         onResult(`Vorbelegung für die Upload-Seite konnte nicht gespeichert werden (${reason || "unbekannt"}) - die Seite wird ohne Vorbelegung geöffnet.`, "error");
       }
       window.open(uploadUrl, "_blank", "noopener");
+    };
+    up.addEventListener("click", (e) => {
+      e.preventDefault();
+      openWithPrefill();
+    });
+    // Mittelklick löst kein click aus, sondern auxclick (button 1): dieselbe
+    // Speicherlogik, sonst fände die Upload-Seite keine Vorbelegung.
+    up.addEventListener("auxclick", (e) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      openWithPrefill();
     });
     return up;
   }
@@ -1624,10 +1653,13 @@
     return cleanup;
   }
 
-  // Datei-Inputs sind oft per CSS versteckt und durch einen Button ersetzt;
-  // für die Auswahl zählt daher "genau ein input[type=file]" - sichtbare
-  // bevorzugt, bei keinem sichtbaren aber genau ein vorhandenes.
+  // Verifizierte Struktur (form#photo_upload): Datei #wpUploadFile, Quelle
+  // #wpUploadDescription (Pflicht, max. 800 Zeichen), Titel #photo_title,
+  // Bildtyp Radio #wpImageType-source. Gezielte Selektoren zuerst, danach
+  // generische Suche, danach Zielwahl per Klick.
   function findFileInputAuto() {
+    const exact = document.querySelector("#wpUploadFile");
+    if (exact && exact.tagName === "INPUT" && exact.type === "file") return exact;
     const all = Array.from(document.querySelectorAll('input[type="file"]')).filter((el) => !el.disabled);
     const visible = all.filter(isVisible);
     if (visible.length === 1) return visible[0];
@@ -1645,28 +1677,63 @@
     return el.tagName === "INPUT" && (el.type === "text" || el.type === "");
   }
 
-  // Genau EIN sichtbares, leeres textarea im selben <form> wie das Datei-Input.
   function findDescriptionAuto(fileInput) {
+    const exact = document.querySelector("#wpUploadDescription");
+    if (exact && exact.tagName === "TEXTAREA") return exact;
     const form = fileInput && fileInput.form;
     if (!form) return null;
     const cands = Array.from(form.querySelectorAll("textarea")).filter((el) => isVisible(el) && !el.value.trim());
     return cands.length === 1 ? cands[0] : null;
   }
 
-  // Hängt text an (überschreibt nie) und löst input/change aus.
-  function appendToField(el, text) {
+  // Trägt text ein: leeres Feld -> setzen, sonst anhängen - aber nur, wenn die
+  // Gesamtlänge maxLen nicht überschreitet. Überschreibt nie. Rückgabe false =
+  // nichts geändert (zu lang). Löst input/change/keyup aus (WikiTrees
+  // limitText hängt an onkeyup).
+  function appendToField(el, text, maxLen) {
     const cur = el.value || "";
-    el.value = cur.trim() ? cur.replace(/\s*$/, "") + "\n" + text : text;
+    const next = cur.trim() ? cur.replace(/\s*$/, "") + "\n" + text : text;
+    if (next.length > maxLen) return false;
+    el.value = next;
     el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("keyup", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
   }
 
   function setFileOnInput(input, file) {
+    // Dasselbe macht WikiTrees eigener Code für den Kamera-Upload.
     const dt = new DataTransfer();
     dt.items.add(file);
     input.files = dt.files;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // WebP o. ä. -> JPEG (Qualität 0.92) per Canvas; weißer Hintergrund, da JPEG
+  // keine Transparenz kennt. Wirft bei nicht dekodierbaren Bildern.
+  async function convertBlobToJpeg(blob) {
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0);
+    if (bitmap.close) bitmap.close();
+    const out = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    if (!out) throw new Error("Umwandlung nach JPEG fehlgeschlagen");
+    return out;
+  }
+
+  // Bildtyp "Source" (Archivscan, kein Foto der Person): click(), damit die
+  // Seiten-Handler laufen. Das Radio ist KEIN Submit.
+  function selectSourceImageType() {
+    const radio = document.querySelector("#wpImageType-source");
+    if (!radio || radio.type !== "radio") return false;
+    if (!radio.checked) radio.click();
+    return radio.checked;
   }
 
   function createUploadPanel(personId, uploads) {
@@ -1678,7 +1745,7 @@
         <button id="qba-close" title="Schließen">✕</button>
       </div>
       <div id="qba-body">
-        <p class="qba-hint">Vorbereitete Bilder für dieses Profil. Das Panel füllt nur Felder aus – auf „Hochladen“ klickst du selbst, nachdem du alles geprüft hast.</p>
+        <p class="qba-hint">Vorbereitete Bilder für dieses Profil. Das Panel füllt nur Felder aus (Bildtyp „Source“, Quelle, Titel, Datei). Bitte prüfen und dann selbst auf „Upload Image“ klicken.</p>
         <div id="qba-list"></div>
         <div id="qba-message" role="status" aria-live="polite" style="display:none;"></div>
       </div>
@@ -1725,84 +1792,149 @@
       item.appendChild(name);
       item.appendChild(buttons);
 
-      let fileBtn;
-      async function putFile() {
-        fileBtn.disabled = true;
-        try {
-          const res = await chrome.runtime.sendMessage({ type: "FETCH_UPLOAD_FILE", personId, url: entry.url });
-          if (!res || !res.ok) {
-            showMessage(`Bild konnte nicht geladen werden: ${(res && res.reason) || "unbekannter Fehler"}`, "error");
-            return;
+      // Liefert {file} oder null (Fehler wurde bereits gemeldet).
+      async function loadFile() {
+        const res = await chrome.runtime.sendMessage({ type: "FETCH_UPLOAD_FILE", personId, url: entry.url });
+        if (!res || !res.ok) {
+          showMessage(`Bild konnte nicht geladen werden: ${(res && res.reason) || "unbekannter Fehler"}`, "error");
+          return null;
+        }
+        let blob = new Blob([base64ToBytes(res.base64)], { type: res.contentType });
+        let filename = entry.filename;
+        let converted = false;
+        if (!isDirectUploadType(res.contentType)) {
+          // WikiTree nimmt nur JPG/GIF/PNG: per Canvas nach JPEG umwandeln.
+          try {
+            blob = await convertBlobToJpeg(blob);
+          } catch (e) {
+            showMessage(`Bild konnte nicht nach JPEG umgewandelt werden: ${String(e)}`, "error");
+            return null;
           }
-          const file = new File([new Blob([base64ToBytes(res.base64)], { type: res.contentType })], entry.filename, { type: res.contentType });
-          const done = (input) => {
-            try {
-              setFileOnInput(input, file);
-            } catch (e) {
-              showMessage(`Datei konnte nicht ins Feld gelegt werden: ${String(e)}`, "error");
-              return;
-            }
-            showMessage(
-              `„${entry.filename}“ liegt im Dateifeld. Bitte Felder prüfen und selbst auf „Hochladen“ klicken – das Formular wird nicht automatisch abgesendet.`,
-              "ok"
-            );
-          };
+          filename = withJpegExtension(filename);
+          converted = true;
+        }
+        if (blob.size > WIKITREE_UPLOAD_MAX_BYTES) {
+          showMessage(
+            `Die Datei ist ${(blob.size / 1048576).toFixed(1)} MB groß - WikiTree erlaubt höchstens 10 MB. Nicht eingelegt; Bild bitte verkleinern und manuell hochladen.`,
+            "error"
+          );
+          return null;
+        }
+        return { file: new File([blob], filename, { type: blob.type }), converted };
+      }
+
+      // Rückgabe true = Datei liegt im Feld.
+      async function putFile() {
+        try {
+          const loaded = await loadFile();
+          if (!loaded) return false;
           const input = findFileInputAuto();
-          if (input) done(input);
-          else pickThen(isFileInput, "Dateifeld nicht eindeutig erkannt – bitte das Datei-Auswahlfeld anklicken.", done);
+          if (input) {
+            setFileOnInput(input, loaded.file);
+          } else {
+            await new Promise((resolve) => {
+              pickThen(isFileInput, "Dateifeld nicht erkannt – bitte das Datei-Auswahlfeld anklicken.", (el) => {
+                setFileOnInput(el, loaded.file);
+                resolve();
+              });
+            });
+          }
+          if (loaded.converted) showMessage(`Bild wurde nach JPEG umgewandelt (${loaded.file.name}).`, "info");
+          return true;
         } catch (e) {
-          showMessage(`Fehler: ${String(e)}`, "error");
-        } finally {
-          fileBtn.disabled = false;
+          showMessage(`Datei konnte nicht ins Feld gelegt werden: ${String(e)}`, "error");
+          return false;
         }
       }
-      fileBtn = makeButton("Bild ins Dateifeld legen", putFile);
-      buttons.appendChild(fileBtn);
 
+      // Quelle (Pflichtfeld, 20-800 Zeichen): Kurzfassung, nie überschreiben.
+      // Rückgabe "ok" | "toolong" | "nofield".
+      function putDescription(onPicked) {
+        const text = buildUploadSourceText(entry.citation, WIKITREE_DESCRIPTION_MAX);
+        const fill = (el) => {
+          const ok = appendToField(el, text, WIKITREE_DESCRIPTION_MAX);
+          if (!ok) {
+            showMessage(
+              "Im Beschreibungsfeld steht schon Text; die Quellenangabe würde die 800 Zeichen überschreiten und wurde nicht eingefügt. Bitte „Quellenangabe kopieren“ nutzen.",
+              "error"
+            );
+          } else if (text.length < 20) {
+            showMessage("Quellenangabe eingetragen, aber kürzer als 20 Zeichen – WikiTree verlangt mehr. Bitte ergänzen.", "error");
+          }
+          if (onPicked) onPicked(ok);
+          return ok;
+        };
+        const target = findDescriptionAuto(findFileInputAuto());
+        if (target) return fill(target) ? "ok" : "toolong";
+        pickThen(isTextTarget, "Beschreibungsfeld nicht erkannt – bitte das Feld anklicken.", fill);
+        return "nofield";
+      }
+
+      function putTitle() {
+        const el = document.querySelector("#photo_title");
+        if (!el || el.value.trim()) return false; // nie überschreiben
+        el.value = stripFileExtension(entry.filename).slice(0, 100);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+
+      const allBtn = makeButton("Bild + Angaben ins Formular übernehmen", async () => {
+        allBtn.disabled = true;
+        try {
+          const fileOk = await putFile();
+          if (!fileOk) return;
+          const desc = putDescription();
+          putTitle();
+          const typeOk = selectSourceImageType();
+          if (desc === "ok") {
+            showMessage(
+              `Übernommen: Datei, Quelle, Titel${typeOk ? ", Bildtyp „Source“" : ""}. Bitte prüfen und dann selbst auf „Upload Image“ klicken.`,
+              "ok"
+            );
+          }
+        } finally {
+          allBtn.disabled = false;
+        }
+      });
+      buttons.appendChild(allBtn);
+
+      // Einzelne Fallback-Schritte.
+      buttons.appendChild(
+        makeButton("Nur Bild ins Dateifeld", async () => {
+          if (await putFile()) showMessage("Bild liegt im Dateifeld. Bitte prüfen und selbst auf „Upload Image“ klicken.", "ok");
+        }, true)
+      );
       if (entry.citation) {
         buttons.appendChild(
-          makeButton("Quellenangabe ins Beschreibungsfeld", () => {
-            const target = findDescriptionAuto(findFileInputAuto());
-            const fill = (el) => {
-              appendToField(el, entry.citation);
-              showMessage("Quellenangabe eingetragen (vorhandener Text bleibt erhalten). Bitte prüfen.", "ok");
-            };
-            if (target) fill(target);
-            else pickThen(isTextTarget, "Beschreibungsfeld nicht eindeutig erkannt – bitte das Feld anklicken.", fill);
-          })
+          makeButton("Nur Quelle ins Beschreibungsfeld", () => {
+            if (putDescription() === "ok") showMessage("Quellenangabe eingetragen (vorhandener Text bleibt erhalten). Bitte prüfen.", "ok");
+          }, true)
         );
         buttons.appendChild(
-          makeButton(
-            "Quellenangabe kopieren",
-            async () => {
-              try {
-                await navigator.clipboard.writeText(entry.citation);
-                showMessage("Quellenangabe in die Zwischenablage kopiert.", "ok");
-              } catch (e) {
-                showMessage("Automatisches Kopieren nicht möglich.", "error");
-              }
-            },
-            true
-          )
+          makeButton("Quellenangabe kopieren", async () => {
+            try {
+              await navigator.clipboard.writeText(entry.citation);
+              showMessage("Quellenangabe in die Zwischenablage kopiert.", "ok");
+            } catch (e) {
+              showMessage("Automatisches Kopieren nicht möglich.", "error");
+            }
+          }, true)
         );
       }
 
       // Eintrag bleibt nach dem Befüllen stehen (die Seite könnte neu laden);
       // entfernt wird nur auf ausdrücklichen Klick.
       buttons.appendChild(
-        makeButton(
-          "Erledigt – aus Liste entfernen",
-          async () => {
-            try {
-              await chrome.runtime.sendMessage({ type: "REMOVE_PENDING_UPLOAD", personId, id: entry.id });
-            } catch (e) {
-              // Liste im Panel trotzdem bereinigen; Eintrag verfällt nach 1 h von selbst.
-            }
-            item.remove();
-            if (!panel.querySelector(".qba-up-item")) panel.remove();
-          },
-          true
-        )
+        makeButton("Erledigt – aus Liste entfernen", async () => {
+          try {
+            await chrome.runtime.sendMessage({ type: "REMOVE_PENDING_UPLOAD", personId, id: entry.id });
+          } catch (e) {
+            // Liste im Panel trotzdem bereinigen; Eintrag verfällt nach 1 h von selbst.
+          }
+          item.remove();
+          if (!panel.querySelector(".qba-up-item")) panel.remove();
+        }, true)
       );
       return item;
     }
@@ -1831,8 +1963,8 @@
   } else {
     const sources = findSourceLinks();
     if (sources.length > 0) {
+      resolvePersonIdViaApi(); // pageData-Zweig setzt die ID synchron, vor dem Panel
       createLaunchButton(sources);
-      resolvePersonIdViaApi();
     }
   }
 
@@ -1856,6 +1988,7 @@
       extractSourceLinksFromWikitext,
       getEditPersonId,
       getUploadPhotoPersonId,
+      getPageDataPersonId,
       findEditPersonIdInAnchors,
       buildUploadPhotoUrl
     };

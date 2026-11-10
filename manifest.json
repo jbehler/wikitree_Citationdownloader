@@ -31,7 +31,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.wikitree.com/wiki/*", "https://www.wikitree.com/index.php*"],
-      "js": ["content.js"],
+      "js": ["lib/parsers.js", "content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"
     }

@@ -17,8 +17,21 @@ Alle Versionen, neueste zuerst. Die Installations- und Bedienungshinweise stehen
     wählt man es per Klick. **Das Formular wird nie automatisch abgesendet** –
     „Hochladen“ klickt der Nutzer selbst. DjVu-Bilder: keine Vorbelegung
     (erst konvertieren).
-  - Die HTML-Struktur der Upload-Seite ist nicht verifiziert; die Erkennung der
-    Felder ist daher bewusst generisch mit Zielwahl als Rückfall.
+  - Auf das echte Formular (`form#photo_upload`) abgestimmt: Datei
+    `#wpUploadFile`, Quelle `#wpUploadDescription` (Pflicht, 20–800 Zeichen:
+    es wird eine Kurzfassung gebaut, der Link wird nie abgeschnitten),
+    Titel `#photo_title` (nur wenn leer), Bildtyp „Source“ per Klick auf
+    `#wpImageType-source`. Ein Hauptbutton „Bild + Angaben ins Formular
+    übernehmen“ plus Einzel-Buttons; Generische Suche und Zielwahl per Klick
+    nur als Rückfall. Bestehender Text wird nie überschrieben; passt die Quelle
+    nicht mehr in die 800 Zeichen, gibt es eine Meldung und „kopieren“.
+  - Limit 10 MB (wie das Formular). Erlaubt direkt: JPEG, PNG, GIF; WebP wird im
+    Browser per Canvas nach JPEG (.jpg) umgewandelt. DjVu/TIFF: nicht möglich.
+  - Reihenfolge der `person_id`-Ermittlung auf der Profilseite: `#pageData`
+    (`data-mid`, nur wenn `data-mnamedb` zur WikiTree-ID der URL passt), Edit-Link
+    im DOM, zuletzt die WikiTree-API. Mittelklick auf den Upload-Link speichert
+    die Vorbelegung ebenfalls (`auxclick`).
+  - `lib/parsers.js` wird jetzt auch als Content Script vor `content.js` geladen.
   - **Neue Berechtigungen:** `storage` (nur für `storage.session`: die
     vorbereiteten Uploads zwischen Profilseite und Upload-Seite) und der Host
     `https://api.wikitree.com/*` (nur Abruf der Personen-Id über die

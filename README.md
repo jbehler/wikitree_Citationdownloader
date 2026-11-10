@@ -77,13 +77,14 @@ Kopieren-Button.
 - Der Klick merkt sich Bild, Dateinamen und Quellenangabe (1 h, nur im
   Arbeitsspeicher) und öffnet die Upload-Seite in einem neuen Tab. Dort zeigt
   ein Panel die vorbereiteten Bilder: „Bild ins Dateifeld legen“,
-  „Quellenangabe ins Beschreibungsfeld“ (hängt an, überschreibt nichts) oder
-  „Quellenangabe kopieren“. Ist ein Feld nicht eindeutig erkennbar, das Feld
-  einfach anklicken.
+  „Bild + Angaben ins Formular übernehmen“ (Datei, Quelle als Kurzfassung bis
+  800 Zeichen, Titel falls leer, Bildtyp „Source“) sowie Einzel-Buttons und
+  „Quellenangabe kopieren“. Vorhandener Text wird nie überschrieben. Ist ein
+  Feld nicht erkennbar, das Feld einfach anklicken.
 - Die Extension sendet das Formular **nie** ab: Felder prüfen und selbst auf
-  „Hochladen“ klicken. „Erledigt – aus Liste entfernen“ räumt den Eintrag auf.
+  „Upload Image“ klicken. „Erledigt – aus Liste entfernen“ räumt den Eintrag auf.
 - DjVu-Bilder (dLibra) werden nicht vorbelegt: erst in JPEG/PNG umwandeln.
-  Erlaubt sind JPEG, PNG, GIF, WebP bis 25 MB.
+  Erlaubt sind JPEG, PNG, GIF und WebP (wird nach JPEG umgewandelt), höchstens 10 MB.
 
 ### Bilder bei WikiTree
 

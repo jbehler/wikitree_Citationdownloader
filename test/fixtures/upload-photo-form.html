@@ -1,0 +1,11 @@
+<!-- Selbst geschriebener Minimalausschnitt des Upload-Formulars (Struktur wie
+     auf Special:UploadPhoto), ausschließlich mit Beispielwerten. -->
+<form id="photo_upload" name="photo_upload" method="post" action="/wiki/Special:UploadPhoto" enctype="multipart/form-data">
+  <input type="hidden" name="page_id" value="1">
+  <input type="file" name="wpUploadFile" id="wpUploadFile" accept=".jpg,.jpeg,.gif,.png,.pdf">
+  <textarea id="wpUploadDescription" name="wpUploadDescription" rows="5"></textarea>
+  <input type="text" id="photo_title" name="photo_title">
+  <input type="radio" name="wpImageType" id="wpImageType-photo" value="photo" checked>
+  <input type="radio" name="wpImageType" id="wpImageType-source" value="source">
+  <button type="submit" name="wpUpload">Upload Image</button>
+</form>
