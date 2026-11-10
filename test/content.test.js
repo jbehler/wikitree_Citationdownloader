@@ -244,3 +244,14 @@ test("extractSourceLinksFromWikitext: Wiki-Links, nackte URLs, Satzzeichen, Enti
   assert.equal(r[1].citedPageHint, null);
   assert.deepEqual(plain(T.extractSourceLinksFromWikitext("")), []);
 });
+
+test("getUploadPhotoPersonId: nur Special:UploadPhoto mit numerischer person_id", () => {
+  assert.equal(T.getUploadPhotoPersonId("/index.php", "?title=Special:UploadPhoto&person_id=27173610"), "27173610");
+  assert.equal(T.getUploadPhotoPersonId("/index.php", "?person_id=1&title=Special:UploadPhoto"), "1");
+  assert.equal(T.getUploadPhotoPersonId("/index.php", "?title=Special:UploadPhoto&person_id=abc"), null);
+  assert.equal(T.getUploadPhotoPersonId("/index.php", "?title=Special:UploadPhoto"), null);
+  assert.equal(T.getUploadPhotoPersonId("/index.php", "?title=Special:EditPerson&person_id=1"), null);
+  assert.equal(T.getUploadPhotoPersonId("/wiki/Behler-64", "?title=Special:UploadPhoto&person_id=1"), null);
+  assert.equal(T.getUploadPhotoPersonId("/index.php", ""), null);
+  assert.equal(T.getUploadPhotoPersonId("/index.php", undefined), null);
+});

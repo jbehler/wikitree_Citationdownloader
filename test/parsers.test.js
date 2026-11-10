@@ -303,3 +303,90 @@ test("sanitizeFindResult verwirft unzulässige URL-Schemata", () => {
   assert.equal(P.sanitizeFindResult({ ok: true, suggestedUrl: "data:image/png;base64,AA" }).ok, false);
   assert.equal(P.sanitizeFindResult(null), null);
 });
+
+// ---------------------------------------------------------------------
+// WikiTree-API (person_id) und Upload-Vorbelegung
+// ---------------------------------------------------------------------
+
+test("buildWikiTreeApiProfileUrl: getProfile mit Feld Id und appId", () => {
+  const u = new URL(P.buildWikiTreeApiProfileUrl("Behler-64"));
+  assert.equal(u.origin + u.pathname, "https://api.wikitree.com/api.php");
+  assert.equal(u.searchParams.get("action"), "getProfile");
+  assert.equal(u.searchParams.get("key"), "Behler-64");
+  assert.equal(u.searchParams.get("fields"), "Id");
+  assert.equal(u.searchParams.get("appId"), "QuellenbilderAssistent");
+});
+
+test("buildWikiTreeApiProfileUrl: ungültige IDs => null", () => {
+  for (const bad of ["index.php", "Special:Foo", "a b-1", "a/b-1", "", null, undefined, 5]) {
+    assert.equal(P.buildWikiTreeApiProfileUrl(bad), null, String(bad));
+  }
+});
+
+test("parseWikiTreeApiPersonId: Erfolg (Live-Antwort Behler-64)", () => {
+  const json = [{ page_name: "Behler-64", profile: { Id: 27173610, PageId: 29840129, Name: "Behler-64" }, status: 0 }];
+  assert.deepEqual(P.parseWikiTreeApiPersonId(json), { ok: true, personId: "27173610" });
+});
+
+test("parseWikiTreeApiPersonId: status-Fehlertext und Limit exceeded", () => {
+  const a = P.parseWikiTreeApiPersonId([{ status: "Illegal WikiTree ID" }]);
+  assert.equal(a.ok, false);
+  assert.match(a.reason, /Illegal WikiTree ID/);
+  const b = P.parseWikiTreeApiPersonId([{ status: "Limit exceeded." }]);
+  assert.equal(b.ok, false);
+  assert.match(b.reason, /Limit exceeded/);
+});
+
+test("parseWikiTreeApiPersonId: kaputte Struktur", () => {
+  for (const bad of [null, undefined, {}, [], [null], "x", [{ status: 0 }], [{ status: 0, profile: {} }],
+    [{ status: 0, profile: { Id: "27173610" } }], [{ status: 0, profile: { Id: -1 } }],
+    [{ status: 0, profile: { Id: 1.5 } }], [{ status: 0, profile: { Id: 0 } }]]) {
+    assert.equal(P.parseWikiTreeApiPersonId(bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test("arrayBufferToBase64: Binärdaten, groß (blockweise) und Uint8Array", () => {
+  const bytes = new Uint8Array([0, 255, 1, 128, 200]);
+  assert.equal(P.arrayBufferToBase64(bytes.buffer), Buffer.from(bytes).toString("base64"));
+  assert.equal(P.arrayBufferToBase64(bytes), Buffer.from(bytes).toString("base64"));
+  const big = new Uint8Array(300000).map((_, i) => i % 251);
+  assert.equal(P.arrayBufferToBase64(big.buffer), Buffer.from(big).toString("base64"));
+  assert.equal(P.arrayBufferToBase64(new ArrayBuffer(0)), "");
+});
+
+test("normalizeUploadContentType: nur Rasterbilder", () => {
+  assert.equal(P.normalizeUploadContentType("image/jpeg"), "image/jpeg");
+  assert.equal(P.normalizeUploadContentType("IMAGE/PNG; charset=binary"), "image/png");
+  assert.equal(P.normalizeUploadContentType("image/gif"), "image/gif");
+  assert.equal(P.normalizeUploadContentType("image/webp"), "image/webp");
+  for (const bad of ["image/svg+xml", "image/tiff", "text/html", "application/octet-stream", "", null, undefined]) {
+    assert.equal(P.normalizeUploadContentType(bad), null, String(bad));
+  }
+});
+
+test("prunePendingUploads: verwirft Einträge älter als 1 h und ungültige", () => {
+  const now = 10_000_000;
+  const list = [
+    { id: "a", createdAt: now - 1000 },
+    { id: "b", createdAt: now - P.PENDING_UPLOAD_MAX_AGE_MS - 1 },
+    { id: "c" },
+    null,
+    { id: "d", createdAt: now + 5000 }
+  ];
+  assert.deepEqual(P.prunePendingUploads(list, now).map((e) => e.id), ["a"]);
+  assert.deepEqual(P.prunePendingUploads(undefined, now), []);
+});
+
+test("validatePendingUploadInput: URL-Allowlist, personId, Dateiname", () => {
+  const ok = P.validatePendingUploadInput({
+    personId: "27173610", url: "https://example.org/a.jpg", filename: "Matricula - Seite 3.jpg", citation: "* Zitat"
+  });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.entry.filename, "Matricula - Seite 3.jpg");
+  assert.equal(P.validatePendingUploadInput({ personId: "27173610", url: "data:image/png;base64,AAAA", filename: "x.png" }).ok, true);
+  assert.equal(P.validatePendingUploadInput({ personId: "27173610", url: "javascript:alert(1)", filename: "x.jpg" }).ok, false);
+  assert.equal(P.validatePendingUploadInput({ personId: "27173610", url: "data:image/svg+xml,<svg/>", filename: "x.svg" }).ok, false);
+  assert.equal(P.validatePendingUploadInput({ personId: "abc", url: "https://e.org/a.jpg", filename: "x.jpg" }).ok, false);
+  assert.equal(P.validatePendingUploadInput({ personId: "1", url: "https://e.org/a.jpg", filename: "" }).ok, false);
+  assert.equal(P.validatePendingUploadInput(null).ok, false);
+});

@@ -36,8 +36,11 @@ zu bestimmen.
 4. „Entpackte Erweiterung laden“ wählen und diesen Ordner auswählen. Bei einem
    Update auf dieser Karte das Reload-Symbol klicken.
 
-Berechtigungen: `scripting` und `downloads`. Die Host-Rechte für WikiTree und
-die unterstützten Archive stehen in `manifest.json` (`host_permissions`).
+Berechtigungen: `scripting`, `downloads` und `storage` (nur `storage.session`,
+um vorbereitete Uploads kurz im Arbeitsspeicher zwischen Profil- und
+Upload-Seite zu halten). Die Host-Rechte für WikiTree (inkl.
+`api.wikitree.com` zum Ermitteln der Personen-Id), die unterstützten Archive
+und die dafür nötigen Hosts stehen in `manifest.json` (`host_permissions`).
 
 ## Bedienung
 
@@ -66,6 +69,21 @@ Kopieren-Button.
   schon im Text stehen, werden nicht doppelt eingefügt.
 - „⬆ Bei WikiTree hochladen“ öffnet die Upload-Seite (`Special:UploadPhoto`)
   für diese Person.
+
+### Upload-Seite (Vorbelegung)
+
+- Auf der Profilseite wird die Personen-Id bei Bedarf per WikiTree-API geholt;
+  danach erscheint bei jedem gefundenen Bild „⬆ Bei WikiTree hochladen“.
+- Der Klick merkt sich Bild, Dateinamen und Quellenangabe (1 h, nur im
+  Arbeitsspeicher) und öffnet die Upload-Seite in einem neuen Tab. Dort zeigt
+  ein Panel die vorbereiteten Bilder: „Bild ins Dateifeld legen“,
+  „Quellenangabe ins Beschreibungsfeld“ (hängt an, überschreibt nichts) oder
+  „Quellenangabe kopieren“. Ist ein Feld nicht eindeutig erkennbar, das Feld
+  einfach anklicken.
+- Die Extension sendet das Formular **nie** ab: Felder prüfen und selbst auf
+  „Hochladen“ klicken. „Erledigt – aus Liste entfernen“ räumt den Eintrag auf.
+- DjVu-Bilder (dLibra) werden nicht vorbelegt: erst in JPEG/PNG umwandeln.
+  Erlaubt sind JPEG, PNG, GIF, WebP bis 25 MB.
 
 ### Bilder bei WikiTree
 

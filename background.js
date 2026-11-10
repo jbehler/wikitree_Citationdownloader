@@ -1058,6 +1058,146 @@ async function submitFormAndDownload(plinkUrl, folder, suggestedNameBase) {
   }
 }
 
+// ---------------------------------------------------------------------
+// person_id per WikiTree-API
+// ---------------------------------------------------------------------
+// Die Upload-Seite (Special:UploadPhoto&person_id=<Id>) braucht die numerische
+// Id, die auf der Profilseite nicht verlässlich im DOM steht. Die offizielle
+// API liefert sie (getProfile, Feld "Id"). Der Abruf läuft im Service Worker
+// (host_permissions api.wikitree.com), ohne Cookies (credentials "omit") und
+// MIT appId (laut API-Doku Pflicht, sonst strenge Rate-Limits). Erfolge
+// werden im Worker-Speicher gecacht (geht beim Neustart des Workers
+// verloren - harmlos, ein Abruf kostet nur eine Anfrage). Fehler werden
+// NICHT gecacht, damit z. B. "Limit exceeded." später erneut versucht wird.
+const personIdCache = new Map();
+
+async function getWikiTreePersonId(wikiTreeId) {
+  const apiUrl = buildWikiTreeApiProfileUrl(wikiTreeId);
+  if (!apiUrl) return { ok: false, reason: "Keine gültige WikiTree-ID" };
+  if (personIdCache.has(wikiTreeId)) return { ok: true, personId: personIdCache.get(wikiTreeId) };
+  try {
+    const res = await fetchWithTimeout(apiUrl, { credentials: "omit" });
+    if (!res.ok) return { ok: false, reason: `WikiTree-API: HTTP ${res.status}` };
+    let json;
+    try {
+      json = await res.json();
+    } catch (e) {
+      return { ok: false, reason: "WikiTree-API: Antwort ist kein JSON" };
+    }
+    const parsed = parseWikiTreeApiPersonId(json);
+    if (parsed.ok) personIdCache.set(wikiTreeId, parsed.personId);
+    return parsed;
+  } catch (e) {
+    return { ok: false, reason: String(e && e.message ? e.message : e) };
+  }
+}
+
+// ---------------------------------------------------------------------
+// Upload-Vorbelegung: "pending uploads" in chrome.storage.session
+// ---------------------------------------------------------------------
+// storage.session liegt nur im Arbeitsspeicher (weg beim Browser-Ende) und
+// ist standardmäßig nur für vertrauenswürdige Kontexte (Service Worker)
+// zugänglich: Der Background schreibt/liest, das Content Script fragt per
+// Message. Key pro personId, Wert = Liste von Einträgen; Einträge älter
+// als 1 h werden verworfen. Schreibzugriffe laufen seriell (Promise-Kette),
+// damit zwei schnell aufeinanderfolgende Klicks sich nicht überschreiben
+// (read-modify-write).
+let pendingUploadQueue = Promise.resolve();
+
+function withPendingLock(fn) {
+  const run = pendingUploadQueue.then(fn, fn);
+  pendingUploadQueue = run.catch(() => {});
+  return run;
+}
+
+function pendingKey(personId) {
+  return `pending:${personId}`;
+}
+
+async function readPendingList(personId) {
+  const key = pendingKey(personId);
+  const stored = await chrome.storage.session.get(key);
+  return prunePendingUploads(stored[key], Date.now());
+}
+
+function isValidPersonId(personId) {
+  return typeof personId === "string" && /^\d+$/.test(personId);
+}
+
+function storePendingUpload(msg) {
+  const checked = validatePendingUploadInput(msg);
+  if (!checked.ok) return Promise.resolve({ ok: false, reason: checked.reason });
+  return withPendingLock(async () => {
+    try {
+      const list = await readPendingList(msg.personId);
+      // Gleiche Bild-URL erneut: alten Eintrag ersetzen statt doppelt listen.
+      const rest = list.filter((e) => e.url !== checked.entry.url);
+      rest.push({ id: crypto.randomUUID(), createdAt: Date.now(), ...checked.entry });
+      const limited = rest.slice(-PENDING_UPLOAD_MAX_ENTRIES);
+      await chrome.storage.session.set({ [pendingKey(msg.personId)]: limited });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: String(e && e.message ? e.message : e) };
+    }
+  });
+}
+
+async function getPendingUploads(personId) {
+  if (!isValidPersonId(personId)) return { ok: false, reason: "Ungültige personId", uploads: [] };
+  try {
+    const uploads = await withPendingLock(() => readPendingList(personId));
+    return { ok: true, uploads };
+  } catch (e) {
+    return { ok: false, reason: String(e && e.message ? e.message : e), uploads: [] };
+  }
+}
+
+function removePendingUpload(personId, id) {
+  if (!isValidPersonId(personId) || typeof id !== "string") {
+    return Promise.resolve({ ok: false, reason: "Ungültige Anfrage" });
+  }
+  return withPendingLock(async () => {
+    try {
+      const list = await readPendingList(personId);
+      await chrome.storage.session.set({ [pendingKey(personId)]: list.filter((e) => e.id !== id) });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: String(e && e.message ? e.message : e) };
+    }
+  });
+}
+
+// Lädt die Bilddatei für das Dateifeld der Upload-Seite. Das Content Script
+// (Seite wikitree.com) könnte fremde Archive wegen CORS nicht selbst laden;
+// der Worker darf das dank host_permissions. Es wird nur geladen, was als
+// pending upload der personId gespeichert wurde (kein offener Proxy für
+// beliebige URLs). Strenge Prüfung: nur Rasterbilder, max. 25 MB.
+async function fetchUploadFile(msg) {
+  const url = msg && msg.url;
+  if (!isSafeExternalUrl(url, { allowDataImage: true })) return { ok: false, reason: "Unzulässige Bild-URL" };
+  const pending = await getPendingUploads(msg.personId);
+  if (!pending.ok || !pending.uploads.some((e) => e.url === url)) {
+    return { ok: false, reason: "Bild ist nicht (mehr) in der Upload-Liste" };
+  }
+  try {
+    const res = await fetchWithTimeout(url, { credentials: "include" }, 60000);
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status} beim Laden der Bilddatei` };
+    const type = normalizeUploadContentType(res.headers.get("content-type"));
+    if (!type) {
+      return { ok: false, reason: `Kein unterstütztes Bildformat (Content-Type: ${res.headers.get("content-type") || "unbekannt"}; erlaubt: JPEG, PNG, GIF, WebP)` };
+    }
+    const declared = parseInt(res.headers.get("content-length") || "", 10);
+    if (Number.isFinite(declared) && declared > UPLOAD_MAX_BYTES) {
+      return { ok: false, reason: "Datei größer als 25 MB" };
+    }
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > UPLOAD_MAX_BYTES) return { ok: false, reason: "Datei größer als 25 MB" };
+    return { ok: true, contentType: type, base64: arrayBufferToBase64(buf) };
+  } catch (e) {
+    return { ok: false, reason: String(e && e.message ? e.message : e) };
+  }
+}
+
 // Ein zentraler Message-Handler statt fünf separater addListener-Blöcke:
 // gleiche Semantik (sendResponse + return true für die asynchrone Antwort),
 // aber alle unterstützten Nachrichtentypen an einem Ort sichtbar.
@@ -1087,6 +1227,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       submitFormAndDownload(url, folder, suggestedNameBase).then(sendResponse);
       return true;
     }
+    case "GET_WIKITREE_PERSON_ID":
+      getWikiTreePersonId(msg.wikiTreeId).then(sendResponse);
+      return true;
+    case "STORE_PENDING_UPLOAD":
+      // URL-Feld wird in validatePendingUploadInput über die Allowlist geprüft.
+      storePendingUpload(msg).then(sendResponse);
+      return true;
+    case "GET_PENDING_UPLOADS":
+      getPendingUploads(msg.personId).then((r) => {
+        // Antworten mit URL-Feldern ebenfalls über die Allowlist.
+        r.uploads = r.uploads.filter((e) => isSafeExternalUrl(e.url, { allowDataImage: true }));
+        sendResponse(r);
+      });
+      return true;
+    case "REMOVE_PENDING_UPLOAD":
+      removePendingUpload(msg.personId, msg.id).then(sendResponse);
+      return true;
+    case "FETCH_UPLOAD_FILE":
+      fetchUploadFile(msg).then(sendResponse);
+      return true;
     default:
       return undefined;
   }

@@ -13,7 +13,8 @@
   box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
 
-#qba-panel {
+#qba-panel,
+#qba-upload-panel {
   position: fixed;
   bottom: 20px;
   right: 20px;
@@ -228,3 +229,24 @@ body.qba-picking, body.qba-picking * {
   border-radius: 4px;
   cursor: pointer;
 }
+
+/* Upload-Panel auf Special:UploadPhoto (Vorbelegung von Datei und Beschreibung) */
+.qba-up-item {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+.qba-up-name { font-weight: bold; word-break: break-word; margin-bottom: 4px; }
+.qba-up-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
+.qba-up-buttons button {
+  padding: 5px 8px;
+  border: 1px solid #2e6da4;
+  background: #2e6da4;
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.qba-up-buttons button.qba-secondary { background: #fff; color: #2e6da4; }
+.qba-up-buttons button:disabled { background: #aac4da; border-color: #aac4da; cursor: not-allowed; }

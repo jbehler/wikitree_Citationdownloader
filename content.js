@@ -20,6 +20,15 @@
  * den Rest der Sitzung. Das ersetzt Rate-Selektoren durch eine sichere,
  * direkte Zuordnung.
  *
+ * Upload-Vorbelegung: Der Link "Bei WikiTree hochladen" legt vorher einen
+ * "pending upload" im Background ab (chrome.storage.session). Auf der
+ * Upload-Seite (index.php?title=Special:UploadPhoto&person_id=<Id>) bietet
+ * ein kleines Panel an, die Bilddatei ins Dateifeld zu legen und die
+ * Quellenangabe ins Beschreibungsfeld zu schreiben. Die HTML-Struktur der
+ * Upload-Seite ist NICHT verifiziert (wikitree.com blockt automatische
+ * Abrufe) - alles dort arbeitet defensiv/generisch, mit Zielwahl per Klick
+ * als Rückfall. Das Formular wird NIE abgesendet.
+ *
  * Gespeichert wird nie automatisch - das bleibt immer ein bewusster Klick
  * auf WikiTrees eigenen "Save"-Button.
  */
@@ -27,6 +36,10 @@
 (function () {
   let manualTarget = null; // per Klick ausgewähltes Editor-Feld (Textarea oder contenteditable)
   let activePickingCancel = null; // Cleanup-Funktion, solange der Ziel-Auswahlmodus läuft
+  // person_id, die per WikiTree-API ermittelt wurde (Profilseite). Panels
+  // melden sich als Listener an und aktivieren ihre Upload-Links nachträglich.
+  let apiPersonId = null;
+  const personIdListeners = [];
 
   // Bekannte Institutionen mit verifizierten Lizenzangaben. Für alles
   // andere (z.B. Arcinsys Hessen) wird NICHT einfach dieselbe Lizenz
@@ -173,6 +186,21 @@
     return url.href;
   }
 
+  // Upload-Seite: Pfad "/index.php", title=Special:UploadPhoto, person_id rein
+  // numerisch. Gibt die ID oder null zurück (alle anderen index.php-Seiten).
+  function getUploadPhotoPersonId(pathname, search) {
+    if (pathname !== "/index.php") return null;
+    let params;
+    try {
+      params = new URLSearchParams(search || "");
+    } catch (e) {
+      return null;
+    }
+    if (params.get("title") !== "Special:UploadPhoto") return null;
+    const id = params.get("person_id");
+    return id && /^\d+$/.test(id) ? id : null;
+  }
+
   // Sucht in einer Liste von Link-Zieladressen (absolute URLs, wie a.href sie
   // liefert) den ersten Link auf die Bearbeitungsseite: Pfad "/index.php",
   // title=Special:EditPerson, u rein numerisch. Gibt die numerische ID oder
@@ -217,8 +245,33 @@
     return url.href;
   }
 
+  // Für den Upload-Link: ID aus der Bearbeitungsseite/Profil-DOM, sonst die
+  // per WikiTree-API ermittelte (Profilseite).
+  function getKnownPersonId() {
+    return getCurrentEditPersonId() || apiPersonId;
+  }
+
   function getUploadUrlForCurrentPage() {
-    return buildUploadPhotoUrl(getCurrentEditPersonId());
+    return buildUploadPhotoUrl(getKnownPersonId());
+  }
+
+  // Holt die person_id über den Background (WikiTree-API) - nur wenn die
+  // Seite sie nicht selbst liefert und die Pfad-ID wie eine WikiTree-ID
+  // aussieht (z. B. "Behler-64"). Fehler sind unkritisch: dann gibt es
+  // einfach keinen Upload-Link (wie bisher), keine ID wird geraten.
+  async function resolvePersonIdViaApi() {
+    if (getCurrentEditPersonId()) return;
+    const wikiTreeId = getWikiTreeIdFromUrl();
+    if (!/^[^\s/]+-\d+$/.test(wikiTreeId)) return;
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "GET_WIKITREE_PERSON_ID", wikiTreeId });
+      if (res && res.ok && typeof res.personId === "string" && /^\d+$/.test(res.personId)) {
+        apiPersonId = res.personId;
+        personIdListeners.forEach((fn) => fn());
+      }
+    } catch (e) {
+      // Worker nicht erreichbar o. ä.: ignorieren
+    }
   }
 
   function decodeBasicEntities(str) {
@@ -941,6 +994,40 @@
     return up;
   }
 
+  // Upload-Link MIT Vorbelegung: Vor dem Öffnen der Upload-Seite wird das Bild
+  // als "pending upload" im Background gespeichert (await!), erst dann geht
+  // der neue Tab auf - sonst könnte die Upload-Seite die Liste noch leer
+  // vorfinden. Klappt das Speichern nicht, öffnet sich die Seite trotzdem
+  // (dann ohne Vorbelegung) und onResult meldet es. Mittlere Maustaste
+  // löst kein click aus und öffnet ohne Vorbelegung - bewusst hingenommen.
+  function createPendingUploadLink(uploadUrl, personId, source, info, onResult) {
+    const up = createUploadLink(uploadUrl);
+    up.title = "Merkt sich Bild und Quellenangabe und öffnet die Upload-Seite (dort Vorbelegung per Panel)";
+    up.addEventListener("click", async (e) => {
+      e.preventDefault();
+      let ok = false;
+      let reason = "";
+      try {
+        const res = await chrome.runtime.sendMessage({
+          type: "STORE_PENDING_UPLOAD",
+          personId,
+          url: info.downloadUrl || info.imageUrl,
+          filename: `${buildFileLabel(source, info)}.${guessExtension(info)}`,
+          citation: buildCitationText(source, info).citation
+        });
+        ok = Boolean(res && res.ok);
+        reason = (res && res.reason) || "";
+      } catch (err) {
+        reason = String(err);
+      }
+      if (!ok && onResult) {
+        onResult(`Vorbelegung für die Upload-Seite konnte nicht gespeichert werden (${reason || "unbekannt"}) - die Seite wird ohne Vorbelegung geöffnet.`, "error");
+      }
+      window.open(uploadUrl, "_blank", "noopener");
+    });
+    return up;
+  }
+
   function createPanel(sources) {
     const panel = document.createElement("div");
     panel.id = "qba-panel";
@@ -1130,6 +1217,32 @@
 
     sources.forEach((s, i) => renderRow(i));
 
+    // Füllt den Upload-Platzhalter eines Bilds, sobald die person_id bekannt
+    // ist (sofort oder später per API). DjVu (dLibra) lässt sich nicht als
+    // Bild hochladen: dort nur der normale Link plus Hinweis, keine Vorbelegung.
+    function fillUploadSlot(slot) {
+      if (slot.childNodes.length > 0) return;
+      const personId = getKnownPersonId();
+      const uploadUrl = buildUploadPhotoUrl(personId);
+      if (!uploadUrl) return;
+      const i = parseInt(slot.dataset.idx, 10);
+      const info = sources[i] && sources[i].imageInfo;
+      if (!info) return;
+      if (info.via === "dlibra-djvu" || info.previewUnavailable) {
+        slot.appendChild(createUploadLink(uploadUrl));
+        const note = document.createElement("div");
+        note.className = "qba-caveat";
+        note.textContent = "Keine Vorbelegung möglich (DjVu): Bild erst in JPEG/PNG umwandeln, dann hochladen.";
+        slot.appendChild(note);
+        return;
+      }
+      slot.appendChild(createPendingUploadLink(uploadUrl, personId, sources[i], info, showMessage));
+    }
+    personIdListeners.push(() => {
+      if (!panel.isConnected) return;
+      panel.querySelectorAll(".qba-upload-slot").forEach(fillUploadSlot);
+    });
+
     function renderResult(i) {
       const statusEl = panel.querySelector(`#qba-status-${i}`);
       const previewEl = panel.querySelector(`#qba-preview-${i}`);
@@ -1192,10 +1305,13 @@
         dl.className = "qba-download";
         dl.textContent = "⬇ Bild herunterladen (danach manuell bei WikiTree hochladen)";
         previewEl.appendChild(dl);
-        // Nur auf der Bearbeitungsseite (Personen-ID bekannt), siehe
-        // getUploadUrlForCurrentPage.
-        const uploadUrl = getUploadUrlForCurrentPage();
-        if (uploadUrl) previewEl.appendChild(createUploadLink(uploadUrl));
+        // Upload-Link, sobald die Personen-ID bekannt ist (Bearbeitungsseite
+        // sofort, Profilseite nach Auflösung per API): siehe fillUploadSlot.
+        const slot = document.createElement("span");
+        slot.className = "qba-upload-slot";
+        slot.dataset.idx = String(i);
+        previewEl.appendChild(slot);
+        fillUploadSlot(slot);
       } else {
         statusEl.textContent = `kein Bild automatisch gefunden – es wird nur der Link zitiert (${(info && info.reason) || "unbekannt"})`;
       }
@@ -1458,13 +1574,265 @@
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Upload-Seite (Special:UploadPhoto): Vorbelegung von Datei und Beschreibung
+  // ---------------------------------------------------------------------
+  // ACHTUNG: Die HTML-Struktur der Upload-Seite ist nicht verifiziert. Daher:
+  // genau ein sichtbares Dateifeld -> nehmen, sonst Zielwahl per Klick;
+  // Beschreibungsfeld nur bei genau einem leeren Textfeld im selben <form>,
+  // sonst Zielwahl per Klick. Das Formular wird nie abgesendet.
+
+  function base64ToBytes(b64) {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  // Wie startPickingTarget, aber mit frei wählbarem Filter (z. B. nur
+  // input[type=file]). Gibt die Cleanup-Funktion zurück; onPicked(null) = Abbruch.
+  function pickElement(filterFn, onPicked) {
+    document.body.classList.add("qba-picking");
+    function highlight(e) {
+      document.querySelectorAll(".qba-hover-candidate").forEach((n) => n.classList.remove("qba-hover-candidate"));
+      if (filterFn(e.target)) e.target.classList.add("qba-hover-candidate");
+    }
+    function click(e) {
+      if (!filterFn(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup();
+      onPicked(e.target);
+    }
+    function key(e) {
+      if (e.key === "Escape") {
+        cleanup();
+        onPicked(null);
+      }
+    }
+    function cleanup() {
+      document.removeEventListener("click", click, true);
+      document.removeEventListener("mouseover", highlight, true);
+      document.removeEventListener("keydown", key, true);
+      document.body.classList.remove("qba-picking");
+      document.querySelectorAll(".qba-hover-candidate").forEach((n) => n.classList.remove("qba-hover-candidate"));
+    }
+    document.addEventListener("mouseover", highlight, true);
+    document.addEventListener("click", click, true);
+    document.addEventListener("keydown", key, true);
+    activePickingCancel = cleanup;
+    return cleanup;
+  }
+
+  // Datei-Inputs sind oft per CSS versteckt und durch einen Button ersetzt;
+  // für die Auswahl zählt daher "genau ein input[type=file]" - sichtbare
+  // bevorzugt, bei keinem sichtbaren aber genau ein vorhandenes.
+  function findFileInputAuto() {
+    const all = Array.from(document.querySelectorAll('input[type="file"]')).filter((el) => !el.disabled);
+    const visible = all.filter(isVisible);
+    if (visible.length === 1) return visible[0];
+    if (visible.length === 0 && all.length === 1) return all[0];
+    return null;
+  }
+
+  function isFileInput(el) {
+    return Boolean(el && el.tagName === "INPUT" && el.type === "file");
+  }
+
+  function isTextTarget(el) {
+    if (!el) return false;
+    if (el.tagName === "TEXTAREA") return true;
+    return el.tagName === "INPUT" && (el.type === "text" || el.type === "");
+  }
+
+  // Genau EIN sichtbares, leeres textarea im selben <form> wie das Datei-Input.
+  function findDescriptionAuto(fileInput) {
+    const form = fileInput && fileInput.form;
+    if (!form) return null;
+    const cands = Array.from(form.querySelectorAll("textarea")).filter((el) => isVisible(el) && !el.value.trim());
+    return cands.length === 1 ? cands[0] : null;
+  }
+
+  // Hängt text an (überschreibt nie) und löst input/change aus.
+  function appendToField(el, text) {
+    const cur = el.value || "";
+    el.value = cur.trim() ? cur.replace(/\s*$/, "") + "\n" + text : text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function setFileOnInput(input, file) {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function createUploadPanel(personId, uploads) {
+    const panel = document.createElement("div");
+    panel.id = "qba-upload-panel";
+    panel.innerHTML = `
+      <div id="qba-header">
+        <span>📜 Quellenbilder-Assistent – Upload</span>
+        <button id="qba-close" title="Schließen">✕</button>
+      </div>
+      <div id="qba-body">
+        <p class="qba-hint">Vorbereitete Bilder für dieses Profil. Das Panel füllt nur Felder aus – auf „Hochladen“ klickst du selbst, nachdem du alles geprüft hast.</p>
+        <div id="qba-list"></div>
+        <div id="qba-message" role="status" aria-live="polite" style="display:none;"></div>
+      </div>
+    `;
+    document.body.appendChild(panel);
+    const messageEl = panel.querySelector("#qba-message");
+    function showMessage(text, kind) {
+      messageEl.className = `qba-msg-${kind || "info"}`;
+      messageEl.textContent = text;
+      messageEl.style.display = "block";
+    }
+    panel.querySelector("#qba-close").addEventListener("click", () => {
+      if (activePickingCancel) activePickingCancel();
+      panel.remove();
+    });
+
+    function makeButton(label, onClick, secondary) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      if (secondary) b.className = "qba-secondary";
+      b.addEventListener("click", onClick);
+      return b;
+    }
+
+    // Zielwahl-Rückfall: Nutzer klickt das gewünschte Feld an.
+    function pickThen(filterFn, hint, action) {
+      if (activePickingCancel) activePickingCancel();
+      showMessage(hint + " (Esc = abbrechen)", "info");
+      pickElement(filterFn, (el) => {
+        activePickingCancel = null;
+        if (!el) return showMessage("Auswahl abgebrochen.", "info");
+        action(el);
+      });
+    }
+
+    function renderItem(entry) {
+      const item = document.createElement("div");
+      item.className = "qba-up-item";
+      const name = document.createElement("div");
+      name.className = "qba-up-name";
+      name.textContent = entry.filename;
+      const buttons = document.createElement("div");
+      buttons.className = "qba-up-buttons";
+      item.appendChild(name);
+      item.appendChild(buttons);
+
+      let fileBtn;
+      async function putFile() {
+        fileBtn.disabled = true;
+        try {
+          const res = await chrome.runtime.sendMessage({ type: "FETCH_UPLOAD_FILE", personId, url: entry.url });
+          if (!res || !res.ok) {
+            showMessage(`Bild konnte nicht geladen werden: ${(res && res.reason) || "unbekannter Fehler"}`, "error");
+            return;
+          }
+          const file = new File([new Blob([base64ToBytes(res.base64)], { type: res.contentType })], entry.filename, { type: res.contentType });
+          const done = (input) => {
+            try {
+              setFileOnInput(input, file);
+            } catch (e) {
+              showMessage(`Datei konnte nicht ins Feld gelegt werden: ${String(e)}`, "error");
+              return;
+            }
+            showMessage(
+              `„${entry.filename}“ liegt im Dateifeld. Bitte Felder prüfen und selbst auf „Hochladen“ klicken – das Formular wird nicht automatisch abgesendet.`,
+              "ok"
+            );
+          };
+          const input = findFileInputAuto();
+          if (input) done(input);
+          else pickThen(isFileInput, "Dateifeld nicht eindeutig erkannt – bitte das Datei-Auswahlfeld anklicken.", done);
+        } catch (e) {
+          showMessage(`Fehler: ${String(e)}`, "error");
+        } finally {
+          fileBtn.disabled = false;
+        }
+      }
+      fileBtn = makeButton("Bild ins Dateifeld legen", putFile);
+      buttons.appendChild(fileBtn);
+
+      if (entry.citation) {
+        buttons.appendChild(
+          makeButton("Quellenangabe ins Beschreibungsfeld", () => {
+            const target = findDescriptionAuto(findFileInputAuto());
+            const fill = (el) => {
+              appendToField(el, entry.citation);
+              showMessage("Quellenangabe eingetragen (vorhandener Text bleibt erhalten). Bitte prüfen.", "ok");
+            };
+            if (target) fill(target);
+            else pickThen(isTextTarget, "Beschreibungsfeld nicht eindeutig erkannt – bitte das Feld anklicken.", fill);
+          })
+        );
+        buttons.appendChild(
+          makeButton(
+            "Quellenangabe kopieren",
+            async () => {
+              try {
+                await navigator.clipboard.writeText(entry.citation);
+                showMessage("Quellenangabe in die Zwischenablage kopiert.", "ok");
+              } catch (e) {
+                showMessage("Automatisches Kopieren nicht möglich.", "error");
+              }
+            },
+            true
+          )
+        );
+      }
+
+      // Eintrag bleibt nach dem Befüllen stehen (die Seite könnte neu laden);
+      // entfernt wird nur auf ausdrücklichen Klick.
+      buttons.appendChild(
+        makeButton(
+          "Erledigt – aus Liste entfernen",
+          async () => {
+            try {
+              await chrome.runtime.sendMessage({ type: "REMOVE_PENDING_UPLOAD", personId, id: entry.id });
+            } catch (e) {
+              // Liste im Panel trotzdem bereinigen; Eintrag verfällt nach 1 h von selbst.
+            }
+            item.remove();
+            if (!panel.querySelector(".qba-up-item")) panel.remove();
+          },
+          true
+        )
+      );
+      return item;
+    }
+
+    const list = panel.querySelector("#qba-list");
+    uploads.forEach((u) => list.appendChild(renderItem(u)));
+  }
+
+  // Ohne pending uploads für diese person_id bleibt die Upload-Seite unberührt.
+  async function initUploadPage(personId) {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "GET_PENDING_UPLOADS", personId });
+      if (res && res.ok && Array.isArray(res.uploads) && res.uploads.length > 0) {
+        createUploadPanel(personId, res.uploads);
+      }
+    } catch (e) {
+      // Worker nicht erreichbar: nichts anzeigen
+    }
+  }
+
   if (location.pathname === "/index.php") {
     // Alle anderen index.php-Seiten (Manifest matcht index.php*): nichts tun.
+    const uploadPersonId = getUploadPhotoPersonId(location.pathname, location.search);
     if (getEditPersonId(location.pathname, location.search)) initEditPage();
+    else if (uploadPersonId) initUploadPage(uploadPersonId);
   } else {
     const sources = findSourceLinks();
     if (sources.length > 0) {
       createLaunchButton(sources);
+      resolvePersonIdViaApi();
     }
   }
 
@@ -1487,6 +1855,7 @@
       extractPageHintFromText,
       extractSourceLinksFromWikitext,
       getEditPersonId,
+      getUploadPhotoPersonId,
       findEditPersonIdInAnchors,
       buildUploadPhotoUrl
     };

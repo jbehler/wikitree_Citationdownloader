@@ -4,6 +4,25 @@ Alle Versionen, neueste zuerst. Die Installations- und Bedienungshinweise stehen
 
 ## 0.18.0
 
+- **Upload-Vorbelegung (Special:UploadPhoto):**
+  - Die numerische `person_id` für den Upload-Link wird auf der Profilseite per
+    WikiTree-API (`getProfile`, Feld `Id`, mit `appId=QuellenbilderAssistent`)
+    ermittelt, wenn die Seite sie nicht selbst liefert. Es wird nichts geraten;
+    bei Fehlern gibt es wie bisher keinen Upload-Link.
+  - „⬆ Bei WikiTree hochladen“ merkt sich Bild-URL, Dateinamen und Quellenangabe
+    (`chrome.storage.session`, nur im Arbeitsspeicher, Einträge verfallen nach
+    1 h) und öffnet die Upload-Seite. Dort erscheint ein Panel: Bild ins
+    Dateifeld legen, Quellenangabe ins Beschreibungsfeld eintragen (hängt an,
+    überschreibt nie) oder kopieren. Ist ein Feld nicht eindeutig erkennbar,
+    wählt man es per Klick. **Das Formular wird nie automatisch abgesendet** –
+    „Hochladen“ klickt der Nutzer selbst. DjVu-Bilder: keine Vorbelegung
+    (erst konvertieren).
+  - Die HTML-Struktur der Upload-Seite ist nicht verifiziert; die Erkennung der
+    Felder ist daher bewusst generisch mit Zielwahl als Rückfall.
+  - **Neue Berechtigungen:** `storage` (nur für `storage.session`: die
+    vorbereiteten Uploads zwischen Profilseite und Upload-Seite) und der Host
+    `https://api.wikitree.com/*` (nur Abruf der Personen-Id über die
+    öffentliche WikiTree-API, ohne Cookies).
 - Bugfix: Auf der Profilseite meldete 'In Editor einfügen' Erfolg, obwohl kein Bio-Editor offen war (Text landete in einem unsichtbaren Feld). Jetzt nur sichtbare Felder als Ziel, auf der Profilseite klarer Hinweis + Link zur Bearbeitungsseite (falls auf der Seite vorhanden).
 - **Sicherheit:**
   - Allowlist für Bild- und Download-URLs: übernommen werden nur `http`/`https`
