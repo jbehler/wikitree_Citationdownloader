@@ -1,7 +1,11 @@
 /**
  * content.js
  * -----------------------------------------------------------------------
- * Läuft auf https://www.wikitree.com/wiki/*
+ * Läuft auf https://www.wikitree.com/wiki/* (Profilseite: Quellen-Links aus
+ * der gerenderten Quellenliste) und auf https://www.wikitree.com/index.php*
+ * (nur die Bearbeitungsseite Special:EditPerson&u=<ID>: Quellen-Links aus
+ * dem Wikitext der Bio-Textarea; auf allen anderen index.php-Seiten tut das
+ * Script sofort nichts, siehe getEditPersonId).
  *
  * Erkennt Links zu Matricula Online und zu Landesarchiv NRW (direkt oder
  * über DFG-Viewer), baut daraus Quellenangaben inkl. Lizenztext, versucht
@@ -116,19 +120,127 @@
     return "sonstige-quelle";
   }
 
-  function extractPageHintFromContext(anchor) {
-    // Rein informativ: sucht im nahen Textumfeld des Links nach einer
-    // Seitenangabe wie "S. 123", "Seite 123", "page 123", "Blatt 5",
-    // "Bl. 5", "p. 123", "fol. 123" - so, wie sie oft schon in der
-    // ursprünglichen Quellenbeschreibung auf WikiTree steht. Keine
-    // Grundlage für automatischen Bildabruf, nur eine Orientierungshilfe
-    // für die manuelle Navigation. "Certificate"/"Zertifikat"-Nummern
-    // werden bewusst NICHT erfasst, auch wenn sie danebenstehen - nur
-    // die tatsächliche Seiten-/Blattangabe.
-    const container = anchor.closest("li, p, div") || anchor.parentElement;
-    const text = container ? container.textContent : "";
+  // Text-Kern der Seitenangaben-Erkennung (ohne DOM): wird sowohl für den
+  // Textinhalt des Umfelds eines Links auf der Profilseite als auch für den
+  // <ref>-Block bzw. die Zeile im Bio-Wikitext der Bearbeitungsseite benutzt.
+  function extractPageHintFromText(text) {
+    // Rein informativ: sucht nach einer Seitenangabe wie "S. 123",
+    // "Seite 123", "page 123", "Blatt 5", "Bl. 5", "p. 123", "fol. 123" -
+    // so, wie sie oft schon in der ursprünglichen Quellenbeschreibung auf
+    // WikiTree steht. Keine Grundlage für automatischen Bildabruf, nur eine
+    // Orientierungshilfe für die manuelle Navigation.
+    // "Certificate"/"Zertifikat"-Nummern werden bewusst NICHT erfasst, auch
+    // wenn sie danebenstehen - nur die tatsächliche Seiten-/Blattangabe.
     const m = /\b(?:S\.?|Seite|Blatt|Bl\.?|page|pages|picture|p\.?|pag\.?|fol\.?)\s*(\d+)\b/i.exec(text || "");
     return m ? m[1] : null;
+  }
+
+  function extractPageHintFromContext(anchor) {
+    const container = anchor.closest("li, p, div") || anchor.parentElement;
+    return extractPageHintFromText(container ? container.textContent : "");
+  }
+
+  // ---------------------------------------------------------------------
+  // Bearbeitungsseite (Special:EditPerson): Quellen aus dem Bio-Wikitext
+
+  // Liefert die numerische Personen-ID (String), wenn die aktuelle Seite die
+  // WikiTree-Bearbeitungsseite ist (/index.php?title=Special:EditPerson&u=<ID>,
+  // vom Nutzer bestätigt), sonst null. Das Manifest matcht bewusst
+  // "https://www.wikitree.com/index.php*" - Chrome-Match-Patterns
+  // dokumentieren nicht verbindlich, ob der Query-Teil geprüft wird -, daher
+  // entscheidet erst diese Prüfung, ob das Script auf einer index.php-Seite
+  // überhaupt etwas tut.
+  function getEditPersonId(pathname, search) {
+    if (pathname !== "/index.php") return null;
+    let params;
+    try {
+      params = new URLSearchParams(search || "");
+    } catch (e) {
+      return null;
+    }
+    if (params.get("title") !== "Special:EditPerson") return null;
+    const u = params.get("u");
+    return u && /^\d+$/.test(u) ? u : null;
+  }
+
+  // Link zur Foto-Upload-Seite (vom Nutzer bestätigt). Nur mit rein
+  // numerischer ID, sonst null.
+  function buildUploadPhotoUrl(personId) {
+    if (typeof personId !== "string" || !/^\d+$/.test(personId)) return null;
+    const url = new URL("https://www.wikitree.com/index.php");
+    url.searchParams.set("title", "Special:UploadPhoto");
+    url.searchParams.set("person_id", personId);
+    return url.href;
+  }
+
+  // Upload-Link nur auf der Bearbeitungsseite: Dort steht die Personen-ID
+  // verlässlich in der URL (u=...). Auf der Profilseite /wiki/<WikiTree-ID>
+  // ist die numerische person_id nicht verlässlich bekannt - deshalb dort
+  // bewusst KEIN Upload-Link statt einer geratenen ID.
+  function getUploadUrlForCurrentPage() {
+    return buildUploadPhotoUrl(getEditPersonId(location.pathname, location.search));
+  }
+
+  function decodeBasicEntities(str) {
+    return str
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#0*39;/g, "'")
+      .replace(/&amp;/g, "&"); // zuletzt, damit "&amp;lt;" nicht doppelt dekodiert wird
+  }
+
+  // Umfeld einer URL im Wikitext: der umgebende <ref>…</ref>-Block, sonst
+  // die Zeile.
+  function wikitextContextAt(text, index) {
+    const refStart = text.lastIndexOf("<ref", index);
+    if (refStart !== -1) {
+      const closeBefore = text.indexOf("</ref>", refStart);
+      if (closeBefore === -1 || closeBefore >= index) {
+        return text.slice(refStart, closeBefore === -1 ? text.length : closeBefore);
+      }
+    }
+    const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+    let lineEnd = text.indexOf("\n", index);
+    if (lineEnd === -1) lineEnd = text.length;
+    return text.slice(lineStart, lineEnd);
+  }
+
+  // Liest alle externen http(s)-Links aus dem Bio-Wikitext: externe
+  // Wiki-Links [https://… Text] und nackte URLs. Im Bio-Wikitext sind
+  // externe Links fast immer Quellen, daher KEIN Domain-Filter (anders als
+  // im Fallback-Modus der Profilseite); nur wikitree.com-Links entfallen.
+  function extractSourceLinksFromWikitext(text) {
+    const results = [];
+    const seen = new Set();
+    if (!text) return results;
+    // Alternation: Wiki-Link beginnt mit "[" und wird daher vor der nackten
+    // URL an derselben Stelle erkannt; nackte URLs innerhalb davon werden
+    // nicht doppelt gefunden, weil der Treffer sie mitverbraucht.
+    const re = /\[(https?:\/\/[^\s\]]+)(?:[ \t]+([^\]\n]*))?\]|(https?:\/\/[^\s<>[\]"]+)/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let raw = decodeBasicEntities(m[1] || m[3]);
+      raw = raw.replace(/[)\].,;|]+$/, ""); // abschließende Satzzeichen
+      let u;
+      try {
+        u = new URL(raw);
+      } catch (e) {
+        continue;
+      }
+      if (u.protocol !== "http:" && u.protocol !== "https:") continue;
+      const host = u.hostname.toLowerCase();
+      if (host === "wikitree.com" || host.endsWith(".wikitree.com")) continue;
+      if (seen.has(raw)) continue;
+      seen.add(raw);
+      results.push({
+        url: raw,
+        domain: classifyDomain(raw),
+        linkText: (m[2] ? decodeBasicEntities(m[2]) : "").trim().slice(0, 80),
+        citedPageHint: extractPageHintFromText(wikitextContextAt(text, m.index))
+      });
+    }
+    return results;
   }
 
   function findSourceLinks() {
@@ -589,7 +701,10 @@
   }
 
   function buildFolderName() {
-    const id = getWikiTreeIdFromUrl();
+    // Auf der Bearbeitungsseite ist der letzte Pfadteil "index.php" - dort
+    // gibt es keine WikiTree-ID im Pfad, daher "WikiTree-<u>".
+    const editId = getEditPersonId(location.pathname, location.search);
+    const id = editId ? `WikiTree-${editId}` : getWikiTreeIdFromUrl();
     const name = getPersonNameFromPage();
     return name ? `${id} - ${name}` : id;
   }
@@ -732,8 +847,14 @@
     return false;
   }
 
+  // Standardziel: manuell gewähltes Feld, sonst die automatisch erkannte
+  // Bio-Textarea (auf der Bearbeitungsseite die einzige große Textarea).
+  function getInsertTarget() {
+    return manualTarget && document.contains(manualTarget) ? manualTarget : tryFindBioTextareaAuto();
+  }
+
   function insertIntoEditorOrFallback(fullText) {
-    const target = manualTarget && document.contains(manualTarget) ? manualTarget : tryFindBioTextareaAuto();
+    const target = getInsertTarget();
     if (!target) {
       return { inserted: false, reason: "Kein Bio-Feld gefunden. Bist du im Edit-Modus? Alternativ oben 'Zielfeld wählen' benutzen." };
     }
@@ -749,6 +870,16 @@
   // ---------------------------------------------------------------------
   // UI
   // ---------------------------------------------------------------------
+
+  function createUploadLink(uploadUrl) {
+    const up = document.createElement("a");
+    up.href = uploadUrl;
+    up.target = "_blank";
+    up.rel = "noopener";
+    up.className = "qba-download qba-upload";
+    up.textContent = "⬆ Bei WikiTree hochladen";
+    return up;
+  }
 
   function createPanel(sources) {
     const panel = document.createElement("div");
@@ -800,6 +931,11 @@
       const chosen = checks.filter((c) => c.checked).map((c) => sources[parseInt(c.dataset.idx, 10)]);
       if (chosen.length === 0) return null;
       return chosen.map((s) => buildCitationText(s, s.imageInfo).citation).join("\n");
+    }
+
+    function chosenSources() {
+      const checks = Array.from(panel.querySelectorAll(".qba-check"));
+      return checks.filter((c) => c.checked).map((c) => sources[parseInt(c.dataset.idx, 10)]);
     }
 
     function showFallback(text) {
@@ -977,6 +1113,10 @@
         dl.className = "qba-download";
         dl.textContent = "⬇ Bild herunterladen (danach manuell bei WikiTree hochladen)";
         previewEl.appendChild(dl);
+        // Nur auf der Bearbeitungsseite (Personen-ID bekannt), siehe
+        // getUploadUrlForCurrentPage.
+        const uploadUrl = getUploadUrlForCurrentPage();
+        if (uploadUrl) previewEl.appendChild(createUploadLink(uploadUrl));
       } else {
         statusEl.textContent = `kein Bild automatisch gefunden – es wird nur der Link zitiert (${(info && info.reason) || "unbekannt"})`;
       }
@@ -1047,16 +1187,39 @@
     });
 
     panel.querySelector("#qba-insert").addEventListener("click", () => {
-      const fullText = chosenCitationText();
+      let fullText = chosenCitationText();
       if (fullText === null) {
         showMessage("Bitte mindestens eine Quelle auswählen.", "info");
         return;
       }
 
+      // Zitate, die wortgleich schon im Bio-Text stehen, nicht doppelt
+      // einfügen (typisch auf der Bearbeitungsseite).
+      const targetEl = getInsertTarget();
+      const existing = targetEl && typeof targetEl.value === "string" ? targetEl.value : "";
+      let skipped = 0;
+      if (existing) {
+        const fresh = chosenSources()
+          .map((s) => buildCitationText(s, s.imageInfo).citation)
+          .filter((c) => {
+            if (existing.includes(c)) {
+              skipped++;
+              return false;
+            }
+            return true;
+          });
+        if (fresh.length === 0) {
+          showMessage("Alle ausgewählten Zitate stehen bereits wortgleich im Text - nichts eingefügt.", "info");
+          return;
+        }
+        fullText = fresh.join("\n");
+      }
+
       const result = insertIntoEditorOrFallback(fullText);
       if (result.inserted) {
         panel.querySelector("#qba-fallback").style.display = "none";
-        showMessage("Eingefügt. Bitte im Editor prüfen (Vorschau!) und danach selbst bei WikiTree speichern.", "ok");
+        const dupNote = skipped > 0 ? ` ${skipped} Zitat(e) standen schon wortgleich im Text und wurden nicht doppelt eingefügt.` : "";
+        showMessage("Eingefügt. Bitte im Editor prüfen (Vorschau!) und danach selbst bei WikiTree speichern." + dupNote, "ok");
       } else {
         showFallback(fullText);
         showMessage(result.reason || "Automatisches Einfügen nicht möglich - Text bitte unten kopieren.", "error");
@@ -1145,6 +1308,13 @@
         btn.textContent = originalLabel;
         btn.disabled = false;
       }
+      // Einmaliger Upload-Link nach dem Sammel-Download (nur Bearbeitungsseite).
+      const uploadUrl = getUploadUrlForCurrentPage();
+      if (uploadUrl && !panel.querySelector("#qba-upload-all")) {
+        const up = createUploadLink(uploadUrl);
+        up.id = "qba-upload-all";
+        panel.querySelector("#qba-actions-download").appendChild(up);
+      }
     });
 
     panel.querySelector("#qba-copy").addEventListener("click", async () => {
@@ -1182,9 +1352,29 @@
     document.body.appendChild(btn);
   }
 
-  const sources = findSourceLinks();
-  if (sources.length > 0) {
-    createLaunchButton(sources);
+  // Auf der Bearbeitungsseite wird die Textarea evtl. erst nach dem Laden
+  // befüllt: kurz (max. ~3 s, alle 500 ms) erneut lesen. Ohne Treffer
+  // bleibt die Seite unverändert.
+  async function initEditPage() {
+    for (let attempt = 0; attempt < 7; attempt++) {
+      const ta = tryFindBioTextareaAuto();
+      if (ta && typeof ta.value === "string" && ta.value.trim()) {
+        const found = extractSourceLinksFromWikitext(ta.value);
+        if (found.length > 0) createLaunchButton(found);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  if (location.pathname === "/index.php") {
+    // Alle anderen index.php-Seiten (Manifest matcht index.php*): nichts tun.
+    if (getEditPersonId(location.pathname, location.search)) initEditPage();
+  } else {
+    const sources = findSourceLinks();
+    if (sources.length > 0) {
+      createLaunchButton(sources);
+    }
   }
 
   // Nur für Tests (test/content.test.js): Der Test setzt vor dem Laden
@@ -1202,7 +1392,11 @@
       domainLabel,
       requestImageInfo,
       cleanLabel,
-      humanizeHost
+      humanizeHost,
+      extractPageHintFromText,
+      extractSourceLinksFromWikitext,
+      getEditPersonId,
+      buildUploadPhotoUrl
     };
   }
 })();

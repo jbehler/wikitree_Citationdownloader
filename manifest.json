@@ -30,7 +30,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.wikitree.com/wiki/*"],
+      "matches": ["https://www.wikitree.com/wiki/*", "https://www.wikitree.com/index.php*"],
       "js": ["content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"

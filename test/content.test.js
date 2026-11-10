@@ -173,3 +173,56 @@ test("buildCitationText kommt ohne imageInfo (Einfügen vor Prüfung) bei jedem 
     }
   }
 });
+
+// ---- Block E2: Bearbeitungsseite ----
+
+test("getEditPersonId erkennt nur Special:EditPerson mit numerischem u", () => {
+  assert.equal(T.getEditPersonId("/index.php", "?title=Special:EditPerson&u=27173607"), "27173607");
+  assert.equal(T.getEditPersonId("/index.php", "?u=5&title=Special:EditPerson"), "5");
+  assert.equal(T.getEditPersonId("/index.php", "?title=Special:EditPerson&u=abc"), null);
+  assert.equal(T.getEditPersonId("/index.php", "?title=Special:EditPerson"), null);
+  assert.equal(T.getEditPersonId("/index.php", "?title=Special:UploadPhoto&u=1"), null);
+  assert.equal(T.getEditPersonId("/wiki/Test-1", "?title=Special:EditPerson&u=1"), null);
+  assert.equal(T.getEditPersonId("/index.php", ""), null);
+});
+
+test("buildUploadPhotoUrl baut die Upload-URL nur für numerische IDs", () => {
+  assert.equal(
+    T.buildUploadPhotoUrl("27173607"),
+    "https://www.wikitree.com/index.php?title=Special%3AUploadPhoto&person_id=27173607"
+  );
+  assert.equal(T.buildUploadPhotoUrl("12x"), null);
+  assert.equal(T.buildUploadPhotoUrl(null), null);
+});
+
+test("extractPageHintFromText findet Seitenangaben, keine Certificate-Nummern", () => {
+  assert.equal(T.extractPageHintFromText("Taufbuch, S. 123"), "123");
+  assert.equal(T.extractPageHintFromText("Blatt 5"), "5");
+  assert.equal(T.extractPageHintFromText("kein Hinweis"), null);
+  assert.equal(T.extractPageHintFromText(""), null);
+});
+
+test("extractSourceLinksFromWikitext: Wiki-Links, nackte URLs, Satzzeichen, Entities, Filter", () => {
+  const wt = [
+    "== Sources ==",
+    "<references />",
+    "Er wurde geboren.<ref>Taufbuch, S. 42, [https://data.matricula-online.eu/de/x/?pg=42 Matricula Taufbuch]</ref>",
+    "Siehe (https://example.org/a?x=1&amp;y=2).",
+    "* [https://www.wikitree.com/wiki/Test-1 Profil]",
+    "* https://www.wikitree.com/wiki/Test-2",
+    "* https://example.org/a?x=1&y=2,",
+    "* [https://example.org/b]"
+  ].join("\n");
+  const r = JSON.parse(JSON.stringify(T.extractSourceLinksFromWikitext(wt)));
+  assert.deepEqual(r.map((x) => x.url), [
+    "https://data.matricula-online.eu/de/x/?pg=42",
+    "https://example.org/a?x=1&y=2",
+    "https://example.org/b"
+  ]);
+  assert.equal(r[0].linkText, "Matricula Taufbuch");
+  assert.equal(r[0].domain, "matricula");
+  assert.equal(r[0].citedPageHint, "42");
+  assert.equal(r[1].linkText, "");
+  assert.equal(r[1].citedPageHint, null);
+  assert.deepEqual(plain(T.extractSourceLinksFromWikitext("")), []);
+});

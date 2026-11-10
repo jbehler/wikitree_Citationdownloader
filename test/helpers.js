@@ -21,6 +21,7 @@ function loadContentScript(src, { sendMessage } = {}) {
     location: { pathname: "/wiki/Test-1", href: "https://www.wikitree.com/wiki/Test-1" },
     chrome: { runtime: { sendMessage: sendMessage || (async () => ({})) } },
     URL,
+    URLSearchParams,
     console
   };
   vm.createContext(sandbox);
