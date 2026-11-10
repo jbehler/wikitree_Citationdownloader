@@ -4,6 +4,7 @@ Alle Versionen, neueste zuerst. Die Installations- und Bedienungshinweise stehen
 
 ## 0.18.0
 
+- Bugfix: Auf der Profilseite meldete 'In Editor einfügen' Erfolg, obwohl kein Bio-Editor offen war (Text landete in einem unsichtbaren Feld). Jetzt nur sichtbare Felder als Ziel, auf der Profilseite klarer Hinweis + Link zur Bearbeitungsseite (falls auf der Seite vorhanden).
 - **Sicherheit:**
   - Allowlist für Bild- und Download-URLs: übernommen werden nur `http`/`https`
     sowie `data:image/png|jpeg|gif|webp` (kein SVG); siehe `isSafeExternalUrl`

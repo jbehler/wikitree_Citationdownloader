@@ -186,6 +186,24 @@ test("getEditPersonId erkennt nur Special:EditPerson mit numerischem u", () => {
   assert.equal(T.getEditPersonId("/index.php", ""), null);
 });
 
+test("findEditPersonIdInAnchors findet den ersten gültigen Bearbeiten-Link", () => {
+  const base = "https://www.wikitree.com/index.php";
+  assert.equal(T.findEditPersonIdInAnchors([base + "?title=Special:EditPerson&u=123"]), "123");
+  assert.equal(T.findEditPersonIdInAnchors([base + "?title=Special:UploadPhoto&u=123"]), null);
+  assert.equal(T.findEditPersonIdInAnchors([base + "?title=Special:EditPerson&u=abc"]), null);
+  assert.equal(T.findEditPersonIdInAnchors(["https://www.wikitree.com/wiki/Test-1?title=Special:EditPerson&u=5"]), null);
+  assert.equal(
+    T.findEditPersonIdInAnchors([
+      "nicht-absolut",
+      base + "?title=Special:EditPerson&u=x",
+      base + "?title=Special:EditPerson&u=7",
+      base + "?title=Special:EditPerson&u=8"
+    ]),
+    "7"
+  );
+  assert.equal(T.findEditPersonIdInAnchors([]), null);
+});
+
 test("buildUploadPhotoUrl baut die Upload-URL nur für numerische IDs", () => {
   assert.equal(
     T.buildUploadPhotoUrl("27173607"),

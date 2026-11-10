@@ -173,12 +173,52 @@
     return url.href;
   }
 
-  // Upload-Link nur auf der Bearbeitungsseite: Dort steht die Personen-ID
-  // verlässlich in der URL (u=...). Auf der Profilseite /wiki/<WikiTree-ID>
-  // ist die numerische person_id nicht verlässlich bekannt - deshalb dort
-  // bewusst KEIN Upload-Link statt einer geratenen ID.
+  // Sucht in einer Liste von Link-Zieladressen (absolute URLs, wie a.href sie
+  // liefert) den ersten Link auf die Bearbeitungsseite: Pfad "/index.php",
+  // title=Special:EditPerson, u rein numerisch. Gibt die numerische ID oder
+  // null zurück. Rein und ohne DOM-Zugriff, damit testbar.
+  // ACHTUNG: Ob WikiTree einen solchen Link auf der Profilseite überhaupt
+  // enthält, ist NICHT verifiziert - alle Aufrufer müssen mit null
+  // korrekt funktionieren (dann wird nichts angezeigt, keine ID geraten).
+  function findEditPersonIdInAnchors(hrefs) {
+    if (!Array.isArray(hrefs)) return null;
+    for (const href of hrefs) {
+      let url;
+      try {
+        url = new URL(href);
+      } catch (e) {
+        continue; // relative/kaputte Adresse: überspringen
+      }
+      if (url.pathname !== "/index.php") continue;
+      if (url.searchParams.get("title") !== "Special:EditPerson") continue;
+      const u = url.searchParams.get("u");
+      if (u && /^\d+$/.test(u)) return u;
+    }
+    return null;
+  }
+
+  // Personen-ID der aktuellen Seite: auf der Bearbeitungsseite aus der URL
+  // (verlässlich), auf der Profilseite nur, wenn dort ein Link auf
+  // Special:EditPerson im DOM steht (nicht verifiziert, siehe oben). Sonst
+  // null - dann gibt es dort bewusst KEINEN Upload-/Bearbeiten-Link statt
+  // einer geratenen ID.
+  function getCurrentEditPersonId() {
+    const fromUrl = getEditPersonId(location.pathname, location.search);
+    if (fromUrl) return fromUrl;
+    const hrefs = Array.from(document.querySelectorAll("a[href]")).map((a) => a.href);
+    return findEditPersonIdInAnchors(hrefs);
+  }
+
+  function buildEditPersonUrl(personId) {
+    if (typeof personId !== "string" || !/^\d+$/.test(personId)) return null;
+    const url = new URL("https://www.wikitree.com/index.php");
+    url.searchParams.set("title", "Special:EditPerson");
+    url.searchParams.set("u", personId);
+    return url.href;
+  }
+
   function getUploadUrlForCurrentPage() {
-    return buildUploadPhotoUrl(getEditPersonId(location.pathname, location.search));
+    return buildUploadPhotoUrl(getCurrentEditPersonId());
   }
 
   function decodeBasicEntities(str) {
@@ -785,7 +825,26 @@
     return cleanup; // zum externen Aufräumen (z. B. beim Schließen des Panels)
   }
 
-  function tryFindBioTextareaAuto() {
+  // Sichtbar = im DOM, hat Layout-Boxen, nicht per CSS ausgeblendet und
+  // bedienbar. Ein unsichtbares Feld als Einfügeziel führte dazu, dass auf
+  // der Profilseite "Eingefügt" gemeldet wurde, der Nutzer aber nichts sah.
+  function isVisible(el) {
+    if (!el || !el.isConnected) return false;
+    if (el.disabled || el.readOnly) return false;
+    if (!el.getClientRects || el.getClientRects().length === 0) return false;
+    const cs = window.getComputedStyle(el);
+    return cs.visibility !== "hidden" && cs.display !== "none";
+  }
+
+  // opts.requireVisible (Standard true): nur sichtbare Felder - für das
+  // Einfügeziel. Mit false (Lesen der Quellen-Links auf der Bearbeitungsseite)
+  // genügt ein vorhandenes Feld, auch wenn z. B. ein Editor-Overlay es
+  // verdeckt. Der Fallback "größte Textarea" gilt nur auf der
+  // Bearbeitungsseite; auf der Profilseite gibt es nur die bekannten
+  // Selektoren, sonst null.
+  function tryFindBioTextareaAuto(opts) {
+    const requireVisible = !opts || opts.requireVisible !== false;
+    const ok = (el) => el && (!requireVisible || isVisible(el));
     const candidateSelectors = [
       "textarea#wpTextbox1",
       'textarea[name="bio"]',
@@ -794,10 +853,11 @@
       "textarea[name*=bio i]"
     ];
     for (const sel of candidateSelectors) {
-      const el = document.querySelector(sel);
+      const el = Array.from(document.querySelectorAll(sel)).find(ok);
       if (el) return el;
     }
-    const textareas = Array.from(document.querySelectorAll("textarea"));
+    if (!getEditPersonId(location.pathname, location.search)) return null;
+    const textareas = Array.from(document.querySelectorAll("textarea")).filter(ok);
     if (textareas.length === 0) return null;
     textareas.sort((a, b) => (b.rows || 0) * (b.cols || 0) - (a.rows || 0) * (a.cols || 0));
     return textareas[0];
@@ -891,7 +951,7 @@
       </div>
       <div id="qba-body">
         <div id="qba-target-row">
-          <span id="qba-target-status">Ziel-Editor-Feld: nicht ausgewählt (Auto-Erkennung wird versucht)</span>
+          <span id="qba-target-status"></span>
           <button id="qba-pick-target">🎯 Zielfeld wählen</button>
         </div>
         <p class="qba-hint">Externe Quellen-Links auf dieser Seite (z. B. Matricula, Landesarchive, DFG-Viewer):</p>
@@ -913,6 +973,25 @@
       </div>
     `;
     document.body.appendChild(panel);
+
+    // Anfangsstatus der Zielfeld-Zeile: auf der Profilseite ist meist kein
+    // Bio-Editor offen; dort zusätzlich Link zur Bearbeitungsseite, falls
+    // die Seite einen enthält (nicht verifiziert, sonst nichts anzeigen).
+    const onEditPage = Boolean(getEditPersonId(location.pathname, location.search));
+    panel.querySelector("#qba-target-status").textContent = onEditPage
+      ? "Ziel-Editor-Feld: nicht ausgewählt (Auto-Erkennung wird versucht)"
+      : "Ziel-Editor-Feld: auf der Profilseite ist meist keins offen – Kopieren nutzen oder Bearbeitungsseite öffnen";
+    if (!onEditPage) {
+      const editUrl = buildEditPersonUrl(getCurrentEditPersonId());
+      if (editUrl) {
+        const editLink = document.createElement("a");
+        editLink.href = editUrl;
+        editLink.target = "_self";
+        editLink.className = "qba-download qba-edit-link";
+        editLink.textContent = "✏ Profil bearbeiten (Einfügen dort direkt möglich)";
+        panel.querySelector("#qba-target-row").appendChild(editLink);
+      }
+    }
 
     // Meldungszeile statt alert(): blockiert die Seite nicht und bleibt im
     // Panel sichtbar. Text immer per textContent (nie innerHTML), damit
@@ -1215,6 +1294,17 @@
         fullText = fresh.join("\n");
       }
 
+      // Profilseite ohne (sichtbares oder gewähltes) Ziel: nichts einfügen,
+      // keine Erfolgsmeldung - nur Hinweis und Text zum Kopieren.
+      if (!targetEl && !onEditPage) {
+        showFallback(fullText);
+        showMessage(
+          "Auf der Profilseite ist kein Bio-Editor offen. Zitate über '📋 Ausgewählte Zitate kopieren' kopieren oder die Bearbeitungsseite öffnen – dort fügt die Extension direkt ein.",
+          "info"
+        );
+        return;
+      }
+
       const result = insertIntoEditorOrFallback(fullText);
       if (result.inserted) {
         panel.querySelector("#qba-fallback").style.display = "none";
@@ -1357,7 +1447,8 @@
   // bleibt die Seite unverändert.
   async function initEditPage() {
     for (let attempt = 0; attempt < 7; attempt++) {
-      const ta = tryFindBioTextareaAuto();
+      // Nur LESEN: Sichtbarkeit nicht verlangen (Editor-Overlay o. ä.).
+      const ta = tryFindBioTextareaAuto({ requireVisible: false });
       if (ta && typeof ta.value === "string" && ta.value.trim()) {
         const found = extractSourceLinksFromWikitext(ta.value);
         if (found.length > 0) createLaunchButton(found);
@@ -1396,6 +1487,7 @@
       extractPageHintFromText,
       extractSourceLinksFromWikitext,
       getEditPersonId,
+      findEditPersonIdInAnchors,
       buildUploadPhotoUrl
     };
   }
