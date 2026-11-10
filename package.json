@@ -1,6 +1,6 @@
 {
   "name": "wikitree-quellenbilder-assistent",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "private": true,
   "description": "WikiTree Quellenbilder-Assistent (Chrome MV3-Extension) - Entwicklungs-Tooling (Tests, Lint)",
   "scripts": {

@@ -1,12 +1,10 @@
 {
   "manifest_version": 3,
   "name": "WikiTree Quellenbilder-Assistent",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "description": "Findet Quellen-Links (Matricula, DFG-Viewer/Landesarchiv NRW, Landesarchiv BW, Arcinsys, Wielkopolska Digital Library/dLibra u.a.) in einem geöffneten WikiTree-Profil und hilft, korrekte Quellenangaben (und wenn möglich eine Bildvorschau) in den Bio-Editor einzufügen.",
   "permissions": [
-    "activeTab",
     "scripting",
-    "tabs",
     "downloads"
   ],
   "host_permissions": [
